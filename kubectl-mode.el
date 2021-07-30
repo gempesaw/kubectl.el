@@ -9,6 +9,10 @@
       kubectl-current-display ""
       kubectl-current-namespaces '())
 
+(defvar kubectl-current-context "")
+(defvar kubectl-current-cluster "")
+(defvar kubectl-current-namespace "")
+
 (defun kubectl ()
   (interactive)
   (with-current-buffer kubectl-process-buffer
@@ -25,9 +29,9 @@
   (define-key kubectl-mode-map (kbd "R") 'kubectl-choose-resource)
   (define-key kubectl-mode-map (kbd "N") 'kubectl-choose-namespace)
 
-  (define-key kubectl-mode-map (kbd "e") 'kubectl-edit-resource)
-
-  (define-key kubectl-mode-map (kbd "o") 'kubectl-get-yaml)
+  (define-key kubectl-mode-map (kbd "e") 'kubectl-edit-resource-at-point)
+  (define-key kubectl-mode-map (kbd "o") 'kubectl-get-yaml-at-point)
+  (define-key kubectl-mode-map (kbd "<return>") 'kubectl-describe-resource-at-point)
 
   (define-key kubectl-mode-map (kbd "x") 'kubectl-pod-exec)
   (define-key kubectl-mode-map (kbd "l") 'kubectl-pod-logs)
@@ -36,15 +40,19 @@
   (define-key kubectl-mode-map (kbd "p") 'kubectl-previous-line)
 
   (define-key kubectl-mode-map (kbd "g") 'kubectl-init)
-  (define-key kubectl-mode-map (kbd "<return>") 'kubectl-describe-resource-at-point)
   (define-key kubectl-mode-map (kbd "$") 'kubectl-popup-process-window)
   (define-key kubectl-mode-map (kbd ":") 'kubectl-run-custom-command)
   )
 
+
 (defun kubectl-get-current-context ()
   (let* ((kube-config-filename "~/.kube/config")
          (current-context-name (s-chomp (shell-command-to-string (format "yq eval '.current-context' %s" kube-config-filename))))
-         (current-context (s-split "\n" (s-chomp (shell-command-to-string (format "yq eval '.contexts.[] | select(.name == \"%s\") | .context' %s" current-context-name kube-config-filename))))))
+         (current-context (s-split "\n" (s-chomp (shell-command-to-string (format "yq eval '.contexts.[] | select(.name == \"%s\") | .context' %s" current-context-name kube-config-filename)))))
+         (parts (--map (s-trim (cadr (s-split-up-to ":" it 1))) current-context)))
+    (setq kubectl-current-context current-context-name)
+    (setq kubectl-current-cluster (car parts))
+    (setq kubectl-current-namespace (cadr parts))
     (-concat `(,(format "Context: %s" current-context-name)) (--map (s-capitalize it) current-context))))
 
 (defun kubectl-update-process-buffer (output)
@@ -202,15 +210,15 @@
       (message (format "expected a pod, but %s is not a pod" pod)))))
 
 (defun kubectl-pod-logs ()
-  (interactive )
+  (interactive)
   (let* ((pod (car (s-split " " (substring-no-properties (current-line-contents)))))
          (pod-p (s-equals-p "pod" (car (s-split "/" pod)))))
     (if pod-p
         (kubectl--run-command (format "kubectl logs --tail=50 -f %s" pod))
       (message (format "expected a pod, but %s is not a pod" pod)))))
 
-(defun kubectl-get-yaml ()
-  (interactive )
+(defun kubectl-get-yaml-at-point ()
+  (interactive)
   (let* ((resource-at-point (car (s-split " " (substring-no-properties (current-line-contents))))))
     (kubectl--run-command (format "kubectl get %s --output yaml" resource-at-point))))
 
