@@ -24,19 +24,16 @@
       (goto-char (point-max))
       (insert (if header
                   (format "---\n\n%s\n\n" string)
-                string))
-      (set-window-point
-       (get-buffer-window (current-buffer) 'visible)
-       (point-max)))))
+                string)))))
 
 (defun kubectl--run-process (command)
-  (let ((bpr-on-completion 'kubectl--update-process-buffer))
+  (let* ((bpr-on-completion 'kubectl--update-process-buffer))
     (kubectl--update-process-buffer-string command t)
     (bpr-spawn command)))
 
 (defun kubectl--run-process-bg (command on-success)
-  (let ((bpr-show-progress nil)
-        (bpr-on-success on-success))
+  (let* ((bpr-show-progress nil)
+         (bpr-on-success on-success))
     (bpr-spawn command)))
 
 (defun kubectl--run-process-and-pop (command &optional editing)

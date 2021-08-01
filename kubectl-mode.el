@@ -2,6 +2,9 @@
 (require 'dash)
 (require 'kubectl-process)
 (require 'kubectl-edit-mode)
+(require 'kubectl-command-mode)
+(require 'kubectl-transient)
+(require 'kubectl-mode-nav)
 
 
 (defvar kubectl-available-contexts '())
@@ -9,12 +12,16 @@
 (defvar kubectl-current-context "")
 (defvar kubectl-current-cluster "")
 (defvar kubectl-current-namespace "")
+(defvar kubectl-all-namespaces nil)
 (defvar kubectl-current-display "")
 
 (defvar kubectl-main-buffer-name "*kubectl*")
 (defvar kubectl-resources-default "ds,sts,deploy,rs,po,svc,ing")
+(defvar kubectl-resources-current "ds,sts,deploy,rs,po,svc,ing")
 
+(setenv "AWS_EC2_METADATA_DISABLED" "true")
 
+;;;###autoload
 (defun kubectl ()
   (interactive)
   (with-current-buffer (get-buffer-create kubectl-main-buffer-name)
@@ -23,12 +30,13 @@
     (kubectl-mode)
     (kubectl-init)))
 
+;;;###autoload
 (define-derived-mode kubectl-mode special-mode "kubectl"
   (buffer-disable-undo)
   (setq truncate-lines t)
   (setq buffer-read-only t)
-  (define-key kubectl-mode-map (kbd "r") 'kubectl-choose-resource)
-  (define-key kubectl-mode-map (kbd "R") 'kubectl-choose-resource)
+  (define-key kubectl-mode-map (kbd "r") 'kubectl-transient-choose-resource)
+  (define-key kubectl-mode-map (kbd "R") 'kubectl-transient-choose-resource)
   (define-key kubectl-mode-map (kbd "N") 'kubectl-choose-namespace)
   (define-key kubectl-mode-map (kbd "C") 'kubectl-choose-context)
 
@@ -43,9 +51,16 @@
   (define-key kubectl-mode-map (kbd "n") 'kubectl-next-line)
   (define-key kubectl-mode-map (kbd "p") 'kubectl-previous-line)
 
+  (define-key kubectl-mode-map (kbd "M-n") 'kubectl-next-section)
+  (define-key kubectl-mode-map (kbd "M-p") 'kubectl-previous-section)
+
   (define-key kubectl-mode-map (kbd "g") 'kubectl-init)
   (define-key kubectl-mode-map (kbd "$") 'kubectl-show-log-buffer)
-  (define-key kubectl-mode-map (kbd ":") 'kubectl-run-custom-command))
+  (define-key kubectl-mode-map (kbd ":") 'kubectl-run-custom-command)
+
+  (define-key kubectl-mode-map (kbd "?") 'kubectl-transient-help)
+  (define-key kubectl-mode-map (kbd "h") 'kubectl-transient-help)
+  )
 
 
 (defun kubectl-init ()
@@ -62,16 +77,27 @@
          (current-context-name (s-chomp (shell-command-to-string (format "yq eval '.current-context' %s" kube-config-filename))))
          (current-context (s-split "\n" (s-chomp (shell-command-to-string (format "yq eval '.contexts.[] | select(.name == \"%s\") | .context' %s" current-context-name kube-config-filename)))))
          (available-contexts (s-split "\n" (s-chomp (shell-command-to-string (format "yq eval '.contexts.[].name' %s" kube-config-filename)))))
-         (parts (--map (s-trim (cadr (s-split-up-to ":" it 1))) current-context)))
+         (parts (--map (s-trim (cadr (s-split-up-to ":" it 1))) current-context))
+         (context (-concat `(
+                             ("context" ,current-context-name))
+                           (--map (s-split-up-to ": " it 1) current-context)
+                           `(("resources" ,(if kubectl-all-namespaces
+                                               kubectl-resources-current-all-ns
+                                             kubectl-resources-current)))
+                           )))
     (setq kubectl-available-contexts available-contexts
           kubectl-current-context current-context-name
           kubectl-current-cluster (car parts)
-          kubectl-current-namespace (cadr parts))
-    (-concat `(,(format "Context: %s" current-context-name)) (--map (s-capitalize it) current-context))))
+          kubectl-current-namespace (if kubectl-all-namespaces
+                                        "All Namespaces"
+                                      (cadr parts)))
+    context))
 
 (defun kubectl-get-resources ()
   (when (kubectl-ensure-logged-in)
-    (kubectl--run-process (format "kubectl get %s" kubectl-resources-current))))
+    (if kubectl-all-namespaces
+        (kubectl--run-process (format "kubectl get %s --all-namespaces" kubectl-resources-current-all-ns))
+      (kubectl--run-process (format "kubectl get %s" kubectl-resources-current)))))
 
 (defun kubectl-get-namespaces ()
   (when (kubectl-ensure-logged-in "don't force login")
@@ -103,17 +129,39 @@
     (let ((inhibit-read-only t)
           (context (kubectl--get-current-context)))
       (erase-buffer)
-      (insert (s-join "\n" context))
-      (insert (format "\nResources: %s" kubectl-resources-current))
+      (insert (s-join "\n"
+                      (--map (s-join
+                              " " (-concat `(,(s-pad-right 10 " " (format "%s:" (s-capitalize (car it)))))
+                                           `(,(if (and kubectl-all-namespaces
+                                                       (s-equals-p (car it) "namespace"))
+                                                  "All Namespaces"
+                                                (cadr it)))))
+                             context)))
       (insert "\n\n\n")
       (when (not (eq kubectl-current-display ""))
-        (insert kubectl-current-display)))))
+        (insert kubectl-current-display)
+        (kubectl-goto-first-section)))))
 
 (defun kubectl-redraw (text-to-display)
   (with-current-buffer (get-buffer-create kubectl-main-buffer-name)
-    (let ((inhibit-read-only t))
-      (setq kubectl-current-display text-to-display)
+    (let ((inhibit-read-only t)
+          (contents (kubectl--process-display-text text-to-display)))
+      (setq kubectl-current-display contents)
       (kubectl-print-buffer))))
+
+(defun kubectl--process-display-text (text-to-display)
+  (if kubectl-all-namespaces
+      text-to-display
+    (if (s-contains-p "NAME" text-to-display)
+        (s-join ""
+                (--map (let* ((type (s-upcase (car (s-split "[./]" (cadr (s-lines it))))))
+                              (without-whitespace (s-trim-left it))
+                              (current-whitespace (length (car (s-split-up-to "[^ ]" (car (s-lines it)) 1))))
+                              (whitespace (s-repeat (- (+ 4 current-whitespace) (length type)) " "))
+                              (replaced (s-concat type whitespace without-whitespace)))
+                         replaced)
+                       (s-split "NAME" text-to-display t)))
+      text-to-display)))
 
 (defun kubectl-process-sentinel (process signal)
   (with-current-buffer (process-buffer process)
@@ -125,36 +173,8 @@
 
 (defun kubectl-show-log-buffer ()
   (interactive)
-  (pop-to-buffer (kubectl--get-process-buffer)))
-
-(defun kubectl-find-next-line ()
-  (save-excursion
-    (end-of-line)
-    (if (search-forward-regexp "^[[:alpha:].[:digit:]]+?/" nil t)
-        (progn (beginning-of-line)
-               (point))
-      (message "no additional sections available")
-      nil)))
-
-(defun kubectl-find-previous-line ()
-  (save-excursion
-    (if (search-backward-regexp "^[[:alpha:].[:digit:]]+?/" nil t)
-        (progn (beginning-of-line)
-               (point))
-      (message "no additional sections available")
-      nil)))
-
-(defun kubectl-next-line ()
-  (interactive)
-  (let ((next-line (kubectl-find-next-line)))
-    (when next-line
-      (goto-char next-line))))
-
-(defun kubectl-previous-line ()
-  (interactive)
-  (let ((previous-line (kubectl-find-previous-line)))
-    (when previous-line
-      (goto-char previous-line))))
+  (pop-to-buffer (kubectl--get-process-buffer))
+  (goto-char (point-max)))
 
 (defun kubectl-ensure-logged-in (&optional force-login-arg)
   (let* ((expiration (seconds-to-time (string-to-number (getenv "AWS_OKTA_SESSION_EXPIRATION"))))
@@ -167,10 +187,22 @@
           nil)
       t)))
 
+(defun kubectl-current-line-resource-as-string ()
+  (let* ((parts (s-split " +" (substring-no-properties (current-line-contents))))
+         (resource (if kubectl-all-namespaces (cadr parts) (car parts)))
+         (namespace-flag (if kubectl-all-namespaces (format "--namespace %s" (car parts)) ""))
+         (type-prefix (if (and kubectl-all-namespaces
+                               (not (s-contains-p "," kubectl-resources-current-all-ns)))
+                          kubectl-resources-current-all-ns
+                        (if (and (not kubectl-all-namespaces)
+                                 (not (s-contains-p "," kubectl-resources-current)))
+                            kubectl-resources-current
+                          ""))))
+    (format "%s %s %s" namespace-flag type-prefix resource)))
+
 (defun kubectl-describe-resource-at-point ()
   (interactive)
-  (let ((resource-at-point (car (s-split " " (substring-no-properties (current-line-contents))))))
-    (kubectl--run-process-and-pop (format "kubectl describe %s" resource-at-point))))
+  (kubectl--run-process-and-pop (format "kubectl describe %s" (kubectl-current-line-resource-as-string))))
 
 (defun kubectl-run-custom-command (command)
   (interactive "sCommand to run: kubectl ")
@@ -187,7 +219,8 @@
 (defun kubectl-choose-namespace (ns)
   (interactive (list (completing-read "namespace to switch to: " kubectl-available-namespaces nil t)))
   (shell-command-to-string (format "kubectl config set-context --current --namespace %s" ns))
-  (setq kubectl-current-display "")
+  (setq kubectl-current-display ""
+        kubectl-all-namespaces (s-blank-p ns))
   (kubectl-init))
 
 (defun kubectl-choose-context (context)
@@ -220,12 +253,11 @@
 
 (defun kubectl-get-yaml-at-point ()
   (interactive)
-  (let* ((resource-at-point (car (s-split " " (substring-no-properties (current-line-contents))))))
-    (kubectl--run-process-and-pop (format "kubectl get %s --output yaml" resource-at-point))))
+  (kubectl--run-process-and-pop (format "kubectl get %s --output yaml" (kubectl-current-line-resource-as-string))))
 
 (defun kubectl-delete-resource-at-point ()
   (interactive)
-  (let* ((resource-at-point (car (s-split " " (substring-no-properties (current-line-contents)))))
+  (let* ((resource-at-point (kubectl-current-line-resource-as-string))
          (prompt (format "Confirm DELETE %s (cluster: %s | context: %s | namespace: %s) ?"
                          resource-at-point
                          kubectl-current-cluster
