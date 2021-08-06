@@ -39,6 +39,7 @@
 (defun kubectl--run-process-and-pop (command &optional editing)
   (let* ((bpr-on-completion 'kubectl--pop-process)
          (bpr-process-mode (if editing 'kubectl-edit-mode 'kubectl-command-mode))
+         (bpr-erase-process-buffer t)
          (proc (bpr-spawn command)))
     (kubectl--update-process-buffer-string command t)))
 
@@ -46,6 +47,7 @@
   (let ((buffer (process-buffer process)))
     (with-current-buffer buffer
       (let ((inhibit-read-only t))
-        (pop-to-buffer buffer)))))
+        (pop-to-buffer buffer)
+        (goto-char (point-min))))))
 
 (provide 'kubectl-process)

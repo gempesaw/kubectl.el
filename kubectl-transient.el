@@ -23,10 +23,11 @@
   "Choose resources to query for"
 
   ["In a single namespace"
-   ("r" (lambda () (format "Reset to default (%s)" kubectl-resources-default)) kubectl-reset-resources)
-   ("a" "Add a resource to the defaults" kubectl-add-resource)
-   ("c" (lambda () (format "add to Current (%s)" kubectl-resources-current)) kubectl-add-current-resource)
-   ("s" "Specify your own list" kubectl-set-resource)
+   [("r" (lambda () (format "Reset to default (%s)" kubectl-resources-default)) kubectl-reset-resources)
+    ("a" "Add a resource to the defaults" kubectl-add-resource)]
+   [("c" (lambda () (format "add to Current (%s)" kubectl-resources-current)) kubectl-add-current-resource)
+    ("n" "Use the current list as the new default" kubectl-set-current-as-default)]
+   [("s" "Specify your own list" kubectl-set-resource)]
    ]
 
   ["All namespaces"
@@ -37,6 +38,12 @@
 
 (defvar kubectl-resources-current-all-ns "pods")
 
+(defun kubectl-set-current-as-default ()
+  (interactive)
+  (setq kubectl-resources-default kubectl-resources-current
+        kubectl-all-namespaces nil)
+  (kubectl-get-resources))
+
 (defun kubectl-reset-resources ()
   (interactive)
   (setq kubectl-resources-current kubectl-resources-default
@@ -44,13 +51,13 @@
   (kubectl-get-resources))
 
 (defun kubectl-add-resource (resource)
-  (interactive (list (completing-read (format "Resource to query for: (%s)" kubectl-resources-current) (-concat kubectl-api-abbreviations kubectl-api-resource-names nil t))))
+  (interactive (list (completing-read (format "Resource to query for: %s," kubectl-resources-current) (-concat kubectl-api-abbreviations kubectl-api-resource-names nil t))))
   (setq kubectl-resources-current (format "%s,%s" kubectl-resources-default resource)
         kubectl-all-namespaces nil)
   (kubectl-get-resources))
 
 (defun kubectl-add-current-resource (resource)
-  (interactive (list (completing-read (format "Resource to query for: (%s)" kubectl-resources-current) (-concat kubectl-api-abbreviations kubectl-api-resource-names nil t))))
+  (interactive (list (completing-read (format "Resource to query for: %s," kubectl-resources-current) (-concat kubectl-api-abbreviations kubectl-api-resource-names nil t))))
   (setq kubectl-resources-current (format "%s,%s" kubectl-resources-current resource)
         kubectl-all-namespaces nil)
   (kubectl-get-resources))
@@ -62,7 +69,7 @@
   (kubectl-get-resources))
 
 (defun kubectl-add-current-resource-all-ns (resource)
-  (interactive (list (completing-read (format "Resource to query for: (%s)" kubectl-resources-current-all-ns) (-concat kubectl-api-abbreviations kubectl-api-resource-names nil t))))
+  (interactive (list (completing-read (format "Resource to query for: %s," kubectl-resources-current-all-ns) (-concat kubectl-api-abbreviations kubectl-api-resource-names nil t))))
   (setq kubectl-resources-current-all-ns (format "%s,%s" kubectl-resources-current-all-ns resource)
         kubectl-all-namespaces t)
   (kubectl-get-resources))
