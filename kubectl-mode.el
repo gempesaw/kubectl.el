@@ -24,11 +24,16 @@
 ;;;###autoload
 (defun kubectl ()
   (interactive)
-  (with-current-buffer (get-buffer-create kubectl-main-buffer-name)
-    (setq buffer-read-only t)
-    (switch-to-buffer (current-buffer))
-    (kubectl-mode)
-    (kubectl-init)))
+  (let ((cwd (cwd)))
+    (with-current-buffer (get-buffer-create kubectl-main-buffer-name)
+      (setq buffer-read-only t)
+      (switch-to-buffer (current-buffer))
+      (cd cwd)
+      (kubectl-mode)
+      (call-interactively 'kubectl-choose-context)
+      (call-interactively 'kubectl-choose-namespace)
+      (kubectl-transient-choose-resource)
+      (kubectl-init))))
 
 ;;;###autoload
 (define-derived-mode kubectl-mode special-mode "kubectl"
@@ -45,6 +50,7 @@
   (define-key kubectl-mode-map (kbd "o") 'kubectl-get-yaml-at-point)
   (define-key kubectl-mode-map (kbd "<return>") 'kubectl-describe-resource-at-point)
 
+  (define-key kubectl-mode-map (kbd "f") 'kubectl-port-forward)
   (define-key kubectl-mode-map (kbd "x") 'kubectl-pod-exec)
   (define-key kubectl-mode-map (kbd "l") 'kubectl-pod-logs)
 
@@ -217,17 +223,19 @@
   (kubectl-get-resources))
 
 (defun kubectl-choose-namespace (ns)
-  (interactive (list (completing-read "namespace to switch to: " kubectl-available-namespaces nil t)))
-  (shell-command-to-string (format "kubectl config set-context --current --namespace %s" ns))
-  (setq kubectl-current-display ""
-        kubectl-all-namespaces (s-blank-p ns))
-  (kubectl-init))
+  (interactive (list (completing-read (format "namespace to switch to: [%s]" kubectl-current-namespace) kubectl-available-namespaces nil t)))
+  (when (not (s-blank-p ns))
+    (shell-command-to-string (format "kubectl config set-context --current --namespace %s" ns))
+    (setq kubectl-current-display ""
+          kubectl-all-namespaces (s-blank-p ns))
+    (kubectl-init)))
 
 (defun kubectl-choose-context (context)
-  (interactive (list (completing-read "context to switch to: " kubectl-available-contexts nil t)))
-  (shell-command-to-string (format "kubectl config use-context %s" context))
-  (setq kubectl-current-display "")
-  (kubectl-init))
+  (interactive (list (completing-read (format "cluster to switch to: [%s]" kubectl-current-context) kubectl-available-contexts nil t)))
+  (when (not (s-blank-p context))
+    (shell-command-to-string (format "kubectl config use-context %s" context))
+    (setq kubectl-current-display "")
+    (kubectl-init)))
 
 (defun kubectl-pod-exec ()
   (interactive)
@@ -250,6 +258,11 @@
     (if pod-p
         (async-shell-command cmd)
       (message (format "expected a pod, but %s is not a pod" pod)))))
+
+(defun kubectl-port-forward (port)
+  (interactive "sPort to forward: ")
+  (let* ((cmd (format "kubectl port-forward %s %s" (kubectl-current-line-resource-as-string) port)))
+    (async-shell-command cmd)))
 
 (defun kubectl-get-yaml-at-point ()
   (interactive)
