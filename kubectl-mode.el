@@ -22,17 +22,19 @@
 (setenv "AWS_EC2_METADATA_DISABLED" "true")
 
 ;;;###autoload
-(defun kubectl ()
-  (interactive)
+(defun kubectl (prefix)
+  (interactive "P")
   (let ((cwd (cwd)))
     (with-current-buffer (get-buffer-create kubectl-main-buffer-name)
       (setq buffer-read-only t)
       (switch-to-buffer (current-buffer))
       (cd cwd)
       (kubectl-mode)
-      (call-interactively 'kubectl-choose-context)
-      (call-interactively 'kubectl-choose-namespace)
-      (kubectl-transient-choose-resource)
+      (when prefix
+        (call-interactively 'dg-aws-okta-login)
+        (call-interactively 'kubectl-choose-context)
+        (call-interactively 'kubectl-choose-namespace)
+        (kubectl-transient-choose-resource))
       (kubectl-init))))
 
 ;;;###autoload
@@ -41,6 +43,7 @@
   (setq truncate-lines t)
   (setq buffer-read-only t)
   (define-key kubectl-mode-map (kbd "r") 'kubectl-transient-choose-resource)
+  (define-key kubectl-mode-map (kbd "A") 'kubectl-transient-choose-resource-all-ns)
   (define-key kubectl-mode-map (kbd "R") 'kubectl-transient-choose-resource)
   (define-key kubectl-mode-map (kbd "N") 'kubectl-choose-namespace)
   (define-key kubectl-mode-map (kbd "C") 'kubectl-choose-context)
@@ -81,7 +84,7 @@
 (defun kubectl--get-current-context ()
   (let* ((kube-config-filename "~/.kube/config")
          (current-context-name (s-chomp (shell-command-to-string (format "yq eval '.current-context' %s" kube-config-filename))))
-         (current-context (s-split "\n" (s-chomp (shell-command-to-string (format "yq eval '.contexts.[] | select(.name == \"%s\") | .context' %s" current-context-name kube-config-filename)))))
+         (current-context (s-split "\n" (s-chomp (shell-command-to-string (format "yq eval '.contexts.[] | select(.name == \"%s\") | .context' %s | grep -v user:" current-context-name kube-config-filename)))))
          (available-contexts (s-split "\n" (s-chomp (shell-command-to-string (format "yq eval '.contexts.[].name' %s" kube-config-filename)))))
          (parts (--map (s-trim (cadr (s-split-up-to ":" it 1))) current-context))
          (context (-concat `(
@@ -90,6 +93,7 @@
                            `(("resources" ,(if kubectl-all-namespaces
                                                kubectl-resources-current-all-ns
                                              kubectl-resources-current)))
+                           `(("role" ,(format "%s/%s" (getenv "AWS_OKTA_PROFILE") (getenv "AWS_OKTA_ASSUMED_ROLE"))))
                            )))
     (setq kubectl-available-contexts available-contexts
           kubectl-current-context current-context-name
@@ -156,18 +160,20 @@
       (kubectl-print-buffer))))
 
 (defun kubectl--process-display-text (text-to-display)
-  (if kubectl-all-namespaces
-      text-to-display
-    (if (s-contains-p "NAME" text-to-display)
-        (s-join ""
-                (--map (let* ((type (s-upcase (car (s-split "[./]" (cadr (s-lines it))))))
-                              (without-whitespace (s-trim-left it))
-                              (current-whitespace (length (car (s-split-up-to "[^ ]" (car (s-lines it)) 1))))
-                              (whitespace (s-repeat (- (+ 4 current-whitespace) (length type)) " "))
-                              (replaced (s-concat type whitespace without-whitespace)))
-                         replaced)
-                       (s-split "NAME" text-to-display t)))
-      text-to-display)))
+  (condition-case nil
+      (if kubectl-all-namespaces
+          text-to-display
+        (if (s-contains-p "NAME" text-to-display)
+            (s-join ""
+                    (--map (let* ((type (s-upcase (car (s-split "[./]" (cadr (s-lines it))))))
+                                  (without-whitespace (s-trim-left it))
+                                  (current-whitespace (length (car (s-split-up-to "[^ ]" (car (s-lines it)) 1))))
+                                  (whitespace (s-repeat (- (+ 4 current-whitespace) (length type)) " "))
+                                  (replaced (s-concat type whitespace without-whitespace)))
+                             replaced)
+                           (s-split "NAME" text-to-display t)))
+          text-to-display))
+    (error text-to-display)))
 
 (defun kubectl-process-sentinel (process signal)
   (with-current-buffer (process-buffer process)
@@ -231,7 +237,7 @@
     (kubectl-init)))
 
 (defun kubectl-choose-context (context)
-  (interactive (list (completing-read (format "cluster to switch to: [%s]" kubectl-current-context) kubectl-available-contexts nil t)))
+  (interactive (list (completing-read (format "cluster to switch to: [%s]" kubectl-current-context) kubectl-available-contexts nil)))
   (when (not (s-blank-p context))
     (shell-command-to-string (format "kubectl config use-context %s" context))
     (setq kubectl-current-display "")

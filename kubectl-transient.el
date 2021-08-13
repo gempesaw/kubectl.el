@@ -36,6 +36,13 @@
    ]
   )
 
+(define-transient-command kubectl-transient-choose-resource-all-ns ()
+  "Choose resources to query for in all namespaces"
+  ["All namespaces"
+   ("c" (lambda () (format "add to Current (%s)" kubectl-resources-current-all-ns)) kubectl-add-current-resource-all-ns)
+   ("s" "Specify your own list" kubectl-set-resource-all-ns)
+   ])
+
 (defvar kubectl-resources-current-all-ns "pods")
 
 (defun kubectl-set-current-as-default ()

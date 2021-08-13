@@ -1,5 +1,7 @@
 (define-derived-mode kubectl-command-mode special-mode "kubectl-command"
   (buffer-disable-undo)
+  (when (not (s-equals-p (buffer-name) kubectl-process-buffer-name))
+    (erase-buffer))
   (setq truncate-lines t)
   (setq buffer-read-only t)
   (define-key kubectl-command-mode-map (kbd "q") 'kubectl--command-quit-window))
