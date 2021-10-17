@@ -11,8 +11,7 @@
 
 (defun kubectl-edit-resource-at-point ()
   (interactive)
-  (let ((resource-at-point (car (s-split " " (substring-no-properties (current-line-contents))))))
-    (kubectl--run-process-and-pop (format "kubectl get %s --output yaml" resource-at-point) t)))
+  (kubectl--run-process-and-pop (format "kubectl get %s --output yaml" (kubectl-current-line-resource-as-string)) t))
 
 (defun kubectl-edit-apply ()
   (interactive)

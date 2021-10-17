@@ -10,14 +10,20 @@
 (defvar kubectl-available-contexts '())
 (defvar kubectl-available-namespaces '())
 (defvar kubectl-current-context "")
+(defvar kubectl-current-aws-profile "")
 (defvar kubectl-current-cluster "")
 (defvar kubectl-current-namespace "")
 (defvar kubectl-all-namespaces nil)
 (defvar kubectl-current-display "")
+(defvar kubectl-fetch-after-set t)
 
 (defvar kubectl-main-buffer-name "*kubectl*")
-(defvar kubectl-resources-default "ds,sts,deploy,rs,po,svc,ing")
-(defvar kubectl-resources-current "ds,sts,deploy,rs,po,svc,ing")
+(defvar kubectl-resources-default "ds,sts,deploy,po,svc,ing,cm")
+(defvar kubectl-resources-current "ds,sts,deploy,po,svc,ing,cm")
+(defvar kubectl-api-abbreviations '())
+(defvar kubectl-api-resource-names '())
+(defvar kubectl--command-options "")
+(defvar kubectl-aws-expiration "")
 
 (setenv "AWS_EC2_METADATA_DISABLED" "true")
 
@@ -31,11 +37,8 @@
       (cd cwd)
       (kubectl-mode)
       (when prefix
-        (call-interactively 'dg-aws-okta-login)
-        (call-interactively 'kubectl-choose-context)
-        (call-interactively 'kubectl-choose-namespace)
-        (kubectl-transient-choose-resource))
-      (kubectl-init))))
+        (kubectl-toggle-fetch-after-set t))
+      (kubectl-transient-choose-context))))
 
 ;;;###autoload
 (define-derived-mode kubectl-mode special-mode "kubectl"
@@ -45,8 +48,9 @@
   (define-key kubectl-mode-map (kbd "r") 'kubectl-transient-choose-resource)
   (define-key kubectl-mode-map (kbd "A") 'kubectl-transient-choose-resource-all-ns)
   (define-key kubectl-mode-map (kbd "R") 'kubectl-transient-choose-resource)
+  (define-key kubectl-mode-map (kbd "G") 'kubectl-toggle-fetch-after-set)
   (define-key kubectl-mode-map (kbd "N") 'kubectl-choose-namespace)
-  (define-key kubectl-mode-map (kbd "C") 'kubectl-choose-context)
+  (define-key kubectl-mode-map (kbd "C") 'kubectl-transient-choose-context)
 
   (define-key kubectl-mode-map (kbd "e") 'kubectl-edit-resource-at-point)
   (define-key kubectl-mode-map (kbd "k") 'kubectl-delete-resource-at-point)
@@ -77,15 +81,14 @@
   (with-current-buffer (get-buffer-create kubectl-main-buffer-name)
     (let ((inhibit-read-only t))
       (kubectl-print-buffer)
-      (kubectl-get-resources)
-      (kubectl-get-namespaces)
-      (kubectl-get-api-resources))))
+      (kubectl-get-resources))))
 
 (defun kubectl--get-current-context ()
   (let* ((kube-config-filename "~/.kube/config")
          (current-context-name (s-chomp (shell-command-to-string (format "yq eval '.current-context' %s" kube-config-filename))))
          (current-context (s-split "\n" (s-chomp (shell-command-to-string (format "yq eval '.contexts.[] | select(.name == \"%s\") | .context' %s | grep -v user:" current-context-name kube-config-filename)))))
-         (available-contexts (s-split "\n" (s-chomp (shell-command-to-string (format "yq eval '.contexts.[].name' %s" kube-config-filename)))))
+         (available-contexts (kubectl--get-available-contexts))
+         (aws-profiles (kubectl--get-aws-profiles))
          (parts (--map (s-trim (cadr (s-split-up-to ":" it 1))) current-context))
          (context (-concat `(
                              ("context" ,current-context-name))
@@ -94,24 +97,36 @@
                                                kubectl-resources-current-all-ns
                                              kubectl-resources-current)))
                            `(("role" ,(format "%s/%s" (getenv "AWS_OKTA_PROFILE") (getenv "AWS_OKTA_ASSUMED_ROLE"))))
+                           `(("expires" ,(format "%sm" (/ (cadr (time-subtract (seconds-to-time (string-to-number (getenv "AWS_OKTA_SESSION_EXPIRATION"))) (current-time))) 60))))
                            )))
     (setq kubectl-available-contexts available-contexts
           kubectl-current-context current-context-name
           kubectl-current-cluster (car parts)
           kubectl-current-namespace (if kubectl-all-namespaces
                                         "All Namespaces"
-                                      (cadr parts)))
+                                      (cadr parts))
+          kubectl-aws-profiles aws-profiles)
     context))
 
+(defun kubectl--get-available-contexts ()
+  (cdr (s-split "\n" (s-chomp (shell-command-to-string (format "yq eval '.contexts.[].name' %s" "~/.kube/config"))))))
+
+(defun kubectl--get-aws-profiles ()
+  (cdr (reverse (--map (s-chop-suffix "]" it) (s-split "\n" (shell-command-to-string "awk '/^\\[profile/ { print $2}' ~/.aws/config"))))))
+
+(defun kubectl-define-cluster (args)
+  (kubectl--get-current-context)
+  (interactive (list (completing-read (format "cluster to define: [%s]" kubectl-current-context) (kubectl--get-available-contexts) nil)
+                     (completing-read "associated AWS profile: " (kubectl--get-aws-profiless) nil)))
+  (message args))
+
 (defun kubectl-get-resources ()
-  (when (kubectl-ensure-logged-in)
-    (if kubectl-all-namespaces
-        (kubectl--run-process (format "kubectl get %s --all-namespaces" kubectl-resources-current-all-ns))
-      (kubectl--run-process (format "kubectl get %s" kubectl-resources-current)))))
+  (if kubectl-all-namespaces
+      (kubectl--run-process (format "kubectl get %s --all-namespaces" kubectl-resources-current-all-ns))
+    (kubectl--run-process (format "kubectl get %s" kubectl-resources-current))))
 
 (defun kubectl-get-namespaces ()
-  (when (kubectl-ensure-logged-in "don't force login")
-    (kubectl--run-process-bg "kubectl get namespaces" 'kubectl--parse-namespaces)))
+  (kubectl--run-process-bg "kubectl get namespaces" 'kubectl--parse-namespaces))
 
 (defun kubectl--parse-namespaces (process)
   (let ((buffer (process-buffer process)))
@@ -124,8 +139,7 @@
     (kill-buffer buffer)))
 
 (defun kubectl-get-api-resources ()
-  (when (kubectl-ensure-logged-in "don't force login")
-    (kubectl--run-process-bg "kubectl api-resources" 'kubectl--parse-api-resources)))
+  (kubectl--run-process-bg "kubectl api-resources" 'kubectl--parse-api-resources))
 
 (defun kubectl--parse-api-resources (process)
   (let ((buffer (process-buffer process)))
@@ -154,50 +168,14 @@
 
 (defun kubectl-redraw (text-to-display)
   (with-current-buffer (get-buffer-create kubectl-main-buffer-name)
-    (let ((inhibit-read-only t)
-          (contents (kubectl--process-display-text text-to-display)))
-      (setq kubectl-current-display contents)
+    (let ((inhibit-read-only t))
+      (setq kubectl-current-display text-to-display)
       (kubectl-print-buffer))))
-
-(defun kubectl--process-display-text (text-to-display)
-  (condition-case nil
-      (if kubectl-all-namespaces
-          text-to-display
-        (if (s-contains-p "NAME" text-to-display)
-            (s-join ""
-                    (--map (let* ((type (s-upcase (car (s-split "[./]" (cadr (s-lines it))))))
-                                  (without-whitespace (s-trim-left it))
-                                  (current-whitespace (length (car (s-split-up-to "[^ ]" (car (s-lines it)) 1))))
-                                  (whitespace (s-repeat (- (+ 4 current-whitespace) (length type)) " "))
-                                  (replaced (s-concat type whitespace without-whitespace)))
-                             replaced)
-                           (s-split "NAME" text-to-display t)))
-          text-to-display))
-    (error text-to-display)))
-
-(defun kubectl-process-sentinel (process signal)
-  (with-current-buffer (process-buffer process)
-    (let* ((output (buffer-substring-no-properties (point-min) (point-max))))
-      (kubectl-update-process-buffer output)
-      (message "Finished")
-      (kubectl-redraw output)
-      (kill-buffer (current-buffer)))))
 
 (defun kubectl-show-log-buffer ()
   (interactive)
   (pop-to-buffer (kubectl--get-process-buffer))
   (goto-char (point-max)))
-
-(defun kubectl-ensure-logged-in (&optional force-login-arg)
-  (let* ((expiration (seconds-to-time (string-to-number (getenv "AWS_OKTA_SESSION_EXPIRATION"))))
-         (expired (time-subtract expiration (current-time)))
-         (force-login (or force-login-arg "t")))
-    (if (< (time-to-seconds expired) 0)
-        (progn
-          (when (s-equals? force-login "t")
-            (call-interactively #'dg-aws-okta-login))
-          nil)
-      t)))
 
 (defun kubectl-current-line-resource-as-string ()
   (let* ((parts (s-split " +" (substring-no-properties (current-line-contents))))
@@ -228,42 +206,46 @@
       (setq kubectl-resources-current new-resources)))
   (kubectl-get-resources))
 
+(defun kubectl-toggle-fetch-after-set (&optional prefix)
+  (interactive "P")
+  (if prefix
+      (setq kubectl-fetch-after-set nil)
+    (setq kubectl-fetch-after-set (not kubectl-fetch-after-set))
+    (when (not kubectl-fetch-after-set)
+      (message "will not refresh after set; press G to toggle back"))
+    (when kubectl-fetch-after-set
+      (kubectl-init))))
+
 (defun kubectl-choose-namespace (ns)
-  (interactive (list (completing-read (format "namespace to switch to: [%s]" kubectl-current-namespace) kubectl-available-namespaces nil t)))
+  (interactive (list (completing-read (format "namespace to switch to: [%s]" kubectl-current-namespace) kubectl-available-namespaces nil nil)))
   (when (not (s-blank-p ns))
     (shell-command-to-string (format "kubectl config set-context --current --namespace %s" ns))
     (setq kubectl-current-display ""
           kubectl-all-namespaces (s-blank-p ns))
-    (kubectl-init)))
+    (kubectl-get-resources)))
 
-(defun kubectl-choose-context (context)
-  (interactive (list (completing-read (format "cluster to switch to: [%s]" kubectl-current-context) kubectl-available-contexts nil)))
+(defun kubectl-update-context (context)
   (when (not (s-blank-p context))
     (shell-command-to-string (format "kubectl config use-context %s" context))
     (setq kubectl-current-display "")
+    (kubectl-get-namespaces)
+    (kubectl-get-api-resources)
     (kubectl-init)))
 
 (defun kubectl-pod-exec ()
   (interactive)
   (let* ((pod (car (s-split " " (substring-no-properties (current-line-contents)))))
-         (pod-p (s-equals-p "pod" (car (s-split "/" pod))))
          (buf nil))
-    (if pod-p
-        (progn
-          (setq buf (create-new-shell-here))
-          (select-window (display-buffer buf))
-          (insert (format "aws-okta exec sk8 -- kubectl exec -it %s -- bash" pod)))
-      (message (format "expected a pod, but %s is not a pod" pod)))))
+    (setq buf (create-new-shell-here))
+    (select-window (display-buffer buf))
+    (insert (format "aws-okta exec %s -- kubectl exec -it %s -- sh" kubectl-current-aws-profile pod))))
 
 (defun kubectl-pod-logs ()
   (interactive)
   (let* ((pod (car (s-split " " (substring-no-properties (current-line-contents)))))
-         (pod-p (s-equals-p "pod" (car (s-split "/" pod))))
          (cmd (format "kubectl logs --tail=50 -f %s" pod))
          (buf nil))
-    (if pod-p
-        (async-shell-command cmd)
-      (message (format "expected a pod, but %s is not a pod" pod)))))
+    (async-shell-command cmd)))
 
 (defun kubectl-port-forward (port)
   (interactive "sPort to forward: ")

@@ -1,30 +1,29 @@
-(defun kubectl-find-next-line ()
+(defun kubectl-find-line (movement)
   (save-excursion
-    (end-of-line)
-    (if (or (search-forward-regexp "^[[:alpha:].[:digit:]]+?/" nil t)
-            (search-forward-regexp "^[[:alpha:].[:digit:]]+?/" nil t))
-        (progn (beginning-of-line)
-               (point))
-      (message "no additional sections available")
-      nil)))
-
-(defun kubectl-find-previous-line ()
-  (save-excursion
-    (if (search-backward-regexp "^[[:alpha:].[:digit:]]+?/" nil t)
-        (progn (beginning-of-line)
-               (point))
-      (message "no additional sections available")
-      nil)))
+    (funcall movement)
+    (beginning-of-line)
+    (if (or (eq (point) (point-max))
+            (eq (point) (point-min)))
+        (progn
+          (message "no additional sections available")
+          nil)
+      (let ((current-line-contents (current-line-contents)))
+        (if (or (s-match "^NAME" current-line-contents)
+                (s-contains? ":" current-line-contents)
+                (string= "" current-line-contents))
+            (kubectl-find-line movement)
+          (beginning-of-line)
+          (point))))))
 
 (defun kubectl-next-line ()
   (interactive)
-  (let ((next-line (kubectl-find-next-line)))
+  (let ((next-line (kubectl-find-line 'next-line)))
     (when next-line
       (goto-char next-line))))
 
 (defun kubectl-previous-line ()
   (interactive)
-  (let ((previous-line (kubectl-find-previous-line)))
+  (let ((previous-line (kubectl-find-line 'previous-line)))
     (when previous-line
       (goto-char previous-line))))
 
@@ -32,7 +31,7 @@
   (let ((case-fold-search nil))
     (save-excursion
       (next-line)
-      (if (search-forward-regexp "AGE" nil t)
+      (if (search-forward-regexp "NAME" nil t)
           (progn (next-line)
                  (beginning-of-line)
                  (point))
@@ -47,14 +46,14 @@
 
 (defun kubectl-find-previous-section ()
   (let ((case-fold-search nil))
-      (save-excursion
-        (beginning-of-line)
-        (if (search-backward-regexp "AGE" nil t 2)
-            (progn (beginning-of-line)
-                   (next-line)
-                   (point))
-          (message "no additional sections available")
-          nil))))
+    (save-excursion
+      (beginning-of-line)
+      (if (search-backward-regexp "NAME" nil t 2)
+          (progn (beginning-of-line)
+                 (next-line)
+                 (point))
+        (message "no additional sections available")
+        nil))))
 
 (defun kubectl-previous-section ()
   (interactive)
