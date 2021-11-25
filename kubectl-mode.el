@@ -29,19 +29,6 @@
 (setenv "AWS_EC2_METADATA_DISABLED" "true")
 
 ;;;###autoload
-(defun kubectl (prefix)
-  (interactive "P")
-  (let ((cwd (cwd)))
-    (with-current-buffer (get-buffer-create kubectl-main-buffer-name)
-      (setq buffer-read-only t)
-      (switch-to-buffer (current-buffer))
-      (cd cwd)
-      (kubectl-mode)
-      (when prefix
-        (kubectl-toggle-fetch-after-set t))
-      (kubectl-transient-choose-context))))
-
-;;;###autoload
 (define-derived-mode kubectl-mode special-mode "kubectl"
   (buffer-disable-undo)
   (setq truncate-lines t)
