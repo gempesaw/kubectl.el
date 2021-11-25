@@ -74,12 +74,12 @@ the namespace.
 
 ### do things to resource at point
 
-| key        | command                            | description                                                                 |
-|------------|------------------------------------|-----------------------------------------------------------------------------|
-| `e`        | kubectl-edit-resource-at-point     | pop into a new buffer rin yaml mode, with `C-c C-c` to `kubectl apply` back |
-| `k`        | kubectl-delete-resource-at-point   |                                                                             |
-| `o`        | kubectl-get-yaml-at-point          |                                                                             |
-| `<return>` | kubectl-describe-resource-at-point |                                                                             |
+| key        | command                            | description                                                                |
+|------------|------------------------------------|----------------------------------------------------------------------------|
+| `e`        | kubectl-edit-resource-at-point     | pop into a new buffer in yaml mode, with `C-c C-c` to `kubectl apply` back |
+| `k`        | kubectl-delete-resource-at-point   |                                                                            |
+| `o`        | kubectl-get-yaml-at-point          |                                                                            |
+| `<return>` | kubectl-describe-resource-at-point |                                                                            |
 
 ### do things to pods/workloads
 
@@ -104,7 +104,7 @@ the namespace.
 
 | key | command                    | description                                                |
 |-----|----------------------------|------------------------------------------------------------|
-| `g` | kubectl-init               | start `kubectl.el`                                         |
+| `g` | kubectl-init               | refresh the buffer. funny name for it huh.                 |
 | `$` | kubectl-show-log-buffer    | show the results of all the kubectl commands you've issued |
 | `:` | kubectl-run-custom-command | run a kubectl command in the current context               |
 | `?` | kubectl-transient-help     | show a transient with all the available commands           |
