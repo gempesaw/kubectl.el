@@ -1,6 +1,6 @@
 (require 'transient)
 
-(define-transient-command kubectl-transient-help ()
+(transient-define-prefix kubectl-transient-help ()
   "Available kubectl actions"
   ["Set contexts"
    [("R" "resource" kubectl-choose-resource)]
@@ -19,15 +19,15 @@
    [("$" "show log buffer" kubectl-show-log-buffer)]
    [(":" "run custom command" kubectl-run-custom-command)]])
 
-(define-transient-command kubectl-transient-choose-resource ()
+(transient-define-prefix kubectl-transient-choose-resource ()
   "Choose resources to query for"
 
   ["In a single namespace"
    [("r" (lambda () (format "Reset to default (%s)" kubectl-resources-default)) kubectl-reset-resources)
-    ("a" "Add a resource to the defaults" kubectl-add-resource)]
-   [("c" (lambda () (format "add to Current (%s)" kubectl-resources-current)) kubectl-add-current-resource)
-    ("n" "Use the current list as the new default" kubectl-set-current-as-default)]
-   [("s" "Specify your own list" kubectl-set-resource)]
+    ("a" "Add a resource to the defaults" kubectl-add-resource)
+    ("c" (lambda () (format "add to Current (%s)" kubectl-resources-current)) kubectl-add-current-resource)
+    ("n" "Use the current list as the new default" kubectl-set-current-as-default)
+    ("s" "Specify your own list" kubectl-set-resource)]
    ]
 
   ["All namespaces"
@@ -36,31 +36,52 @@
    ]
   )
 
-(define-transient-command kubectl-transient-choose-resource-all-ns ()
+(transient-define-prefix kubectl-transient-choose-resource-all-ns ()
   "Choose resources to query for in all namespaces"
   ["All namespaces"
    ("c" (lambda () (format "add to Current (%s)" kubectl-resources-current-all-ns)) kubectl-add-current-resource-all-ns)
    ("s" "Specify your own list" kubectl-set-resource-all-ns)
    ])
 
-(progn
-  (define-transient-command kubectl-transient-choose-context ()
-    "Choose cluster and AWS profile alias"
-    ["Options"
-     ("a" "AWS Profile" "aws=" :always-read t :choices (lambda (complete-me filter-p completion-type) (kubectl--get-aws-profiles)))
-     ("c" "Kubernetes context" "k8s=" :always-read t :choices (lambda (complete-me filter-p completion-type) (kubectl--get-available-contexts)))]
-    ["Connect" ("SPC" "Connect"
-                (lambda (&optional args)
-                  (interactive (list (transient-args 'kubectl-transient-choose-context)))
-                  (let ((aws-profile (cadr (s-split "=" (car args))))
-                        (context (cadr (s-split "=" (cadr args)))))
-                    (setq kubectl-current-aws-profile aws-profile)
-                    (setq kubectl-current-context context)
-                    (shell-command-to-string (format "kubectl config use-context %s" context))
-                    (kubectl--aws-okta-login-synchronous aws-profile
-                                                         'kubectl--make-proxy-process-current))))])
+(transient-define-prefix kubectl-transient-choose-context ()
+  "Choose cluster and AWS profile alias"
 
-  )
+  ["Options"
+   ("a" "AWS Profile" "aws="
+    :always-read t
+    :init-value (lambda (ob)
+                  (setf (slot-value ob 'value) kubectl-current-aws-profile))
+    :choices (lambda (complete-me filter-p completion-type) (kubectl--get-aws-profiles)))
+   ("c" "Kubernetes context" "k8s="
+    :always-read t
+    :init-value (lambda (ob)
+                  (setf (slot-value ob 'value) kubectl-current-context))
+    :choices (lambda (complete-me filter-p completion-type) (kubectl--get-available-contexts)))
+   ("n" "Namespace" "ns="
+    :always-read t
+    :init-value (lambda (ob)
+                  (setf (slot-value ob 'value) kubectl-current-namespace))
+    :choices (lambda (complete-me filter-p completion-type) kubectl-cached-namespaces))
+   ("r" "Resources" "r="
+    :always-read t
+    :init-value (lambda (ob)
+                  (setf (slot-value ob 'value) kubectl-resources-current)))
+   ]
+  ["Connect" ("SPC" "Connect"
+              (lambda (&optional args)
+                (interactive (list (transient-args 'kubectl-transient-choose-context)))
+                (let ((aws-profile (cadr (s-split "=" (car args))))
+                      (context (cadr (s-split "=" (cadr args))))
+                      (namespace (cadr (s-split "=" (caddr args))))
+                      (resources (transient-arg-value "r=" (transient-args'kubectl-transient-choose-context))))
+                  (setq kubectl-current-aws-profile aws-profile)
+                  (setq kubectl-current-context context)
+                  (setq kubectl-current-namespace namespace)
+                  (shell-command-to-string (format "kubectl config use-context %s" context))
+                  (shell-command-to-string (format "kubectl config set-context --current --namespace %s" namespace))
+                  (setq kubectl-resources-current resources)
+                  (kubectl--aws-okta-login-synchronous aws-profile
+                                                       'kubectl--make-proxy-process-current))))])
 
 (defvar kubectl--aws-okta-login-synchronous-callback)
 (defvar kubectl-current-aws-profile "")

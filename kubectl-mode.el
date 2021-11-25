@@ -9,6 +9,7 @@
 
 (defvar kubectl-available-contexts '())
 (defvar kubectl-available-namespaces '())
+(defvar kubectl-cached-namespaces '())
 (defvar kubectl-current-context "")
 (defvar kubectl-current-aws-profile "")
 (defvar kubectl-current-cluster "")
@@ -97,6 +98,9 @@
 (defun kubectl-get-namespaces ()
   (kubectl--run-process-bg "kubectl get namespaces" 'kubectl--parse-namespaces))
 
+(defun kubectl--cache-namespaces (namespaces)
+  (setq kubectl-cached-namespaces (-uniq (-sort 'string-lessp (-concat namespaces kubectl-cached-namespaces)))))
+
 (defun kubectl--parse-namespaces (process)
   (let ((buffer (process-buffer process)))
     (with-current-buffer buffer
@@ -104,7 +108,8 @@
             (--filter (and (not (s-equals? "" it))
                            (not (s-equals? "NAME" it)))
                       (--map (car (s-split " " it))
-                             (s-split "\n" (buffer-substring-no-properties (point-min) (point-max)))))))
+                             (s-split "\n" (buffer-substring-no-properties (point-min) (point-max))))))
+      (kubectl--cache-namespaces kubectl-available-namespaces))
     (kill-buffer buffer)))
 
 (defun kubectl-get-api-resources ()
