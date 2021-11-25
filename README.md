@@ -105,6 +105,7 @@ the namespace.
 | key | command                    | description                                                |
 |-----|----------------------------|------------------------------------------------------------|
 | `g` | kubectl-init               | refresh the buffer. funny name for it huh.                 |
+| `G` | kubectl-toggle-autorefresh | toggle the autorefresh timer                               |
 | `$` | kubectl-show-log-buffer    | show the results of all the kubectl commands you've issued |
 | `:` | kubectl-run-custom-command | run a kubectl command in the current context               |
 | `?` | kubectl-transient-help     | show a transient with all the available commands           |

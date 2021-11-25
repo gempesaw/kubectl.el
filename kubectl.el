@@ -17,8 +17,7 @@
       (switch-to-buffer (current-buffer))
       (cd cwd)
       (kubectl-mode)
-      (when prefix
-        (kubectl-toggle-fetch-after-set t))
-      (kubectl-transient-choose-context))))
+      (when (not prefix)
+        (kubectl-transient-choose-context)))))
 
 (provide 'kubectl)

@@ -16,6 +16,7 @@
    [("l" "view logs" kubectl-pod-logs)]]
   ["utility"
    [("g" "refresh" kubectl-init)]
+   [("G" "toggle auto refresh" kubectl-toggle-autorefresh)]
    [("$" "show log buffer" kubectl-show-log-buffer)]
    [(":" "run custom command" kubectl-run-custom-command)]])
 

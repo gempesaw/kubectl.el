@@ -6,6 +6,7 @@
 (require 'kubectl-transient)
 (require 'kubectl-mode-nav)
 (require 'kubectl-summary)
+(require 'kubectl-autorefresh)
 
 (defvar kubectl-available-contexts '())
 (defvar kubectl-available-namespaces '())
@@ -16,7 +17,6 @@
 (defvar kubectl-current-namespace "")
 (defvar kubectl-all-namespaces nil)
 (defvar kubectl-current-display "")
-(defvar kubectl-fetch-after-set t)
 
 (defvar kubectl-main-buffer-name "*kubectl*")
 (defvar kubectl-resources-default "ds,sts,deploy,po,svc,ing,cm")
@@ -36,7 +36,7 @@
   (define-key kubectl-mode-map (kbd "r") 'kubectl-transient-choose-resource)
   (define-key kubectl-mode-map (kbd "A") 'kubectl-transient-choose-resource-all-ns)
   (define-key kubectl-mode-map (kbd "R") 'kubectl-transient-choose-resource)
-  (define-key kubectl-mode-map (kbd "G") 'kubectl-toggle-fetch-after-set)
+  (define-key kubectl-mode-map (kbd "G") 'kubectl-toggle-autorefresh)
   (define-key kubectl-mode-map (kbd "N") 'kubectl-choose-namespace)
   (define-key kubectl-mode-map (kbd "C") 'kubectl-transient-choose-context)
 
@@ -80,7 +80,8 @@
 (defun kubectl-get-resources ()
   (if kubectl-all-namespaces
       (kubectl--run-process (format "kubectl get %s --all-namespaces" kubectl-resources-current-all-ns))
-    (kubectl--run-process (format "kubectl get %s" kubectl-resources-current))))
+    (kubectl--run-process (format "kubectl get %s" kubectl-resources-current)))
+  (kubectl-maybe-autorefresh))
 
 (defun kubectl-get-namespaces ()
   (kubectl--run-process-bg "kubectl get namespaces" 'kubectl--parse-namespaces))
@@ -166,16 +167,6 @@
     (let ((new-resources (s-join "," `(,kubectl-resources-current ,resource))))
       (setq kubectl-resources-current new-resources)))
   (kubectl-get-resources))
-
-(defun kubectl-toggle-fetch-after-set (&optional prefix)
-  (interactive "P")
-  (if prefix
-      (setq kubectl-fetch-after-set nil)
-    (setq kubectl-fetch-after-set (not kubectl-fetch-after-set))
-    (when (not kubectl-fetch-after-set)
-      (message "will not refresh after set; press G to toggle back"))
-    (when kubectl-fetch-after-set
-      (kubectl-init))))
 
 (defun kubectl-choose-namespace (ns)
   (interactive (list (completing-read (format "namespace to switch to: [%s]" kubectl-current-namespace) kubectl-available-namespaces nil nil)))
