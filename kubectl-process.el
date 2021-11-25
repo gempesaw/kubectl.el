@@ -54,22 +54,21 @@
 
 (defun kubectl--set-options (command)
   (if (s-starts-with? "kubectl " command)
-      (message (s-replace "kubectl " (format "kubectl %s " kubectl--command-options) command))
+      (s-replace "kubectl " (format "kubectl %s " kubectl--command-options) command)
     command))
 
 (defun kubectl--make-proxy-process-current ()
   (kubectl--make-proxy-process kubectl-current-aws-profile kubectl-current-context))
 
 (defun kubectl--make-proxy-process (aws-profile context)
-  (message "connecting to %s as %s" context aws-profile)
   (let ((buffer "*kubectl-proxy-process*")
         (port (kubectl--find-random-port)))
-    (message "updating command options: %s" port)
     (setq kubectl--command-options (format " --server http://127.0.0.1:%s " port))
+    (message "connecting to %s as %s, proxying port %s" context aws-profile port)
     (when (get-buffer buffer)
       (kill-buffer buffer))
     (let* ((process-name context)
-           (final-command (s-split " " (message (format "aws-okta exec %s -- kubectl --context=%s -v 4 proxy -p %s" aws-profile context port))))
+           (final-command (s-split " " (format "aws-okta exec %s --mfa-duo-device token -- kubectl --context=%s -v 4 proxy -p %s" aws-profile context port)))
            (proc (make-process
                   :name process-name
                   :connection-type 'pipe
@@ -94,7 +93,7 @@
           (kubectl-update-context kubectl-current-context))
         (save-excursion
           (goto-char (process-mark proc))
-          (insert (message string))
+          (insert string)
           (set-marker (process-mark proc) (point)))
         (if moving (goto-char (process-mark proc)))))))
 

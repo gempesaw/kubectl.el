@@ -9,7 +9,7 @@
           nil)
       (let ((current-line-contents (current-line-contents)))
         (if (or (s-match "^NAME" current-line-contents)
-                (s-contains? ":" current-line-contents)
+                (s-contains? ":" (car (s-split "\s" current-line-contents)))
                 (string= "" current-line-contents))
             (kubectl-find-line movement)
           (beginning-of-line)

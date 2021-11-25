@@ -20,7 +20,7 @@
                           kubectl-current-context
                           kubectl-current-namespace))
     (let* ((new-resource (buffer-substring-no-properties (point-min) (point-max)))
-           (cmd-from-buffer (s-chop-prefix "*" (s-trim (car (s-split "--" (buffer-name))))))
+           (cmd-from-buffer (s-chop-prefix "*" (s-trim (car (s-split "--output" (buffer-name))))))
            (filename (make-temp-file (s-replace "/" "." (car (--filter (s-matches-p "/" it) (s-split " " cmd-from-buffer)))) nil nil new-resource))
            (command (format "kubectl apply -f %s" filename))
            (bpr-on-success 'kubectl-edit--cleanup)

@@ -5,7 +5,7 @@
 (require 'kubectl-command-mode)
 (require 'kubectl-transient)
 (require 'kubectl-mode-nav)
-
+(require 'kubectl-summary)
 
 (defvar kubectl-available-contexts '())
 (defvar kubectl-available-namespaces '())
@@ -83,42 +83,11 @@
       (kubectl-print-buffer)
       (kubectl-get-resources))))
 
-(defun kubectl--get-current-context ()
-  (let* ((kube-config-filename "~/.kube/config")
-         (current-context-name (s-chomp (shell-command-to-string (format "yq eval '.current-context' %s" kube-config-filename))))
-         (current-context (s-split "\n" (s-chomp (shell-command-to-string (format "yq eval '.contexts.[] | select(.name == \"%s\") | .context' %s | grep -v user:" current-context-name kube-config-filename)))))
-         (available-contexts (kubectl--get-available-contexts))
-         (aws-profiles (kubectl--get-aws-profiles))
-         (parts (--map (s-trim (cadr (s-split-up-to ":" it 1))) current-context))
-         (context (-concat `(
-                             ("context" ,current-context-name))
-                           (--map (s-split-up-to ": " it 1) current-context)
-                           `(("resources" ,(if kubectl-all-namespaces
-                                               kubectl-resources-current-all-ns
-                                             kubectl-resources-current)))
-                           `(("role" ,(format "%s/%s" (getenv "AWS_OKTA_PROFILE") (getenv "AWS_OKTA_ASSUMED_ROLE"))))
-                           `(("expires" ,(format "%sm" (/ (cadr (time-subtract (seconds-to-time (string-to-number (getenv "AWS_OKTA_SESSION_EXPIRATION"))) (current-time))) 60))))
-                           )))
-    (setq kubectl-available-contexts available-contexts
-          kubectl-current-context current-context-name
-          kubectl-current-cluster (car parts)
-          kubectl-current-namespace (if kubectl-all-namespaces
-                                        "All Namespaces"
-                                      (cadr parts))
-          kubectl-aws-profiles aws-profiles)
-    context))
-
 (defun kubectl--get-available-contexts ()
   (cdr (s-split "\n" (s-chomp (shell-command-to-string (format "yq eval '.contexts.[].name' %s" "~/.kube/config"))))))
 
 (defun kubectl--get-aws-profiles ()
   (cdr (reverse (--map (s-chop-suffix "]" it) (s-split "\n" (shell-command-to-string "awk '/^\\[profile/ { print $2}' ~/.aws/config"))))))
-
-(defun kubectl-define-cluster (args)
-  (kubectl--get-current-context)
-  (interactive (list (completing-read (format "cluster to define: [%s]" kubectl-current-context) (kubectl--get-available-contexts) nil)
-                     (completing-read "associated AWS profile: " (kubectl--get-aws-profiless) nil)))
-  (message args))
 
 (defun kubectl-get-resources ()
   (if kubectl-all-namespaces
@@ -151,7 +120,7 @@
 (defun kubectl-print-buffer ()
   (with-current-buffer (get-buffer-create kubectl-main-buffer-name)
     (let ((inhibit-read-only t)
-          (context (kubectl--get-current-context)))
+          (context (kubectl--get-summary)))
       (erase-buffer)
       (insert (s-join "\n"
                       (--map (s-join
@@ -234,18 +203,21 @@
 
 (defun kubectl-pod-exec ()
   (interactive)
-  (let* ((pod (car (s-split " " (substring-no-properties (current-line-contents)))))
-         (buf nil))
-    (setq buf (create-new-shell-here))
-    (select-window (display-buffer buf))
-    (insert (format "aws-okta exec %s -- kubectl exec -it %s -- sh" kubectl-current-aws-profile pod))))
+  (let ((thing-at-point (car (s-split " " (substring-no-properties (current-line-contents))))))
+    (kubectl--do-to-thing-at-point (format "aws-okta exec %s -- kubectl exec -it %s -- sh" kubectl-current-aws-profile thing-at-point))))
 
 (defun kubectl-pod-logs ()
   (interactive)
-  (let* ((pod (car (s-split " " (substring-no-properties (current-line-contents)))))
-         (cmd (format "kubectl logs --tail=50 -f %s" pod))
+  (let ((thing-at-point (car (s-split " " (substring-no-properties (current-line-contents))))))
+    (kubectl--do-to-thing-at-point (format "kubectl logs --tail=50 -f %s" thing-at-point))))
+
+(defun kubectl--do-to-thing-at-point (command)
+  (interactive)
+  (let* (
          (buf nil))
-    (async-shell-command cmd)))
+    (setq buf (create-new-shell-here))
+    (select-window (display-buffer buf))
+    (insert command)))
 
 (defun kubectl-port-forward (port)
   (interactive "sPort to forward: ")

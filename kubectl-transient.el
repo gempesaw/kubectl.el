@@ -94,12 +94,8 @@
   (let* ((process-buffer (process-buffer proc))
          (process-buffer-contents (with-current-buffer process-buffer (buffer-substring-no-properties (point-min) (point-max))))
          (env-lines (--map (s-replace "export " "" it) (s-split "\n" process-buffer-contents)))
-         (env-values (--map (s-split "=" it) (--filter (s-matches? "AWS_" it) env-lines)))
-         (expiration (seconds-to-time (string-to-number (cadar (-take-last 1 env-values))))))
-    (--each env-values (setenv (car it) (cadr it)))
-    (message (format "expires in %s minutes at %s"
-                     (/ (cadr (time-subtract expiration (current-time))) 60)
-                     (format-time-string "%D %R" expiration)))))
+         (env-values (--map (s-split "=" it) (--filter (s-matches? "AWS_" it) env-lines))))
+    (--each env-values (setenv (car it) (cadr it)))))
 
 (defun kubectl--aws-okta-process-filter (proc string)
   (when (buffer-live-p (process-buffer proc))
@@ -112,7 +108,7 @@
           (message "sending yubbykey to process"))
         (save-excursion
           (goto-char (process-mark proc))
-          (insert (message string))
+          (insert string)
           (set-marker (process-mark proc) (point)))
         (if moving (goto-char (process-mark proc)))))))
 
