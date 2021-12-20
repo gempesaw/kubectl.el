@@ -1,7 +1,18 @@
 (defvar kubectl--sshuttle-login-synchronous-callback)
+(defvar kubectl--shuttle-gateway "stg-gw.pd")
 
-(defun kubectl--sshuttle-login-synchronous (callback)
+(defun kubectl--shuttle-refresh-gateway (&optional gateway)
   (interactive)
+  (let* ((gw (or gateway kubectl--shuttle-gateway))
+         (default-directory (format "/ssh:%s:" gw)))
+    (cd default-directory)
+    (message "gateway refreshed from %s" (pwd)))
+  (cd default-directory))
+
+
+(defun kubectl--sshuttle-login-synchronous (&optional callback)
+  (interactive)
+  (unless callback (setq callback 'ignore))
   (let* ((process-name "sshuttle-login-synchronous" )
          (buffer (format "*%s*" process-name))
          (command (s-split " " "sshuttle --verbose --remote stg-gw.pd 10.0.0.0/8"))
