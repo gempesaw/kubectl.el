@@ -4,6 +4,7 @@
 
 (defun kubectl--aws-okta-login-synchronous (aws-profile callback)
   (interactive)
+  (unless callback (setq callback 'ignore))
   (let* ((process-name "aws-okta-login-synchronous" )
          (buffer (format "*%s*" process-name))
          (command (s-split " " (format "aws-okta env %s --mfa-duo-device token" aws-profile)))
