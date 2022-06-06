@@ -1,5 +1,4 @@
 (require 'transient)
-
 (transient-define-prefix kubectl-transient-help ()
   "Available kubectl actions"
   ["Set contexts"
@@ -48,16 +47,16 @@
   "Choose cluster and AWS profile alias"
 
   ["Options"
-   ("a" "AWS Profile" "aws="
-    :always-read t
-    :init-value (lambda (ob)
-                  (setf (slot-value ob 'value) kubectl-current-aws-profile))
-    :choices (lambda (complete-me filter-p completion-type) (kubectl--get-aws-profiles)))
-   ("c" "Kubernetes context" "k8s="
-    :always-read t
-    :init-value (lambda (ob)
-                  (setf (slot-value ob 'value) kubectl-current-context))
-    :choices (lambda (complete-me filter-p completion-type) (kubectl--get-available-contexts)))
+   ;; ("a" "AWS Profile" "aws="
+   ;;  :always-read t
+   ;;  :init-value (lambda (ob)
+   ;;                (setf (slot-value ob 'value) kubectl-current-aws-profile))
+   ;;  :choices (lambda (complete-me filter-p completion-type) (kubectl--get-aws-profiles)))
+   ;; ("c" "Kubernetes context" "k8s="
+   ;;  :always-read t
+   ;;  :init-value (lambda (ob)
+   ;;                (setf (slot-value ob 'value) kubectl-current-context))
+   ;;  :choices (lambda (complete-me filter-p completion-type) (kubectl--get-available-contexts)))
    ("n" "Namespace" "ns="
     :always-read t
     :init-value (lambda (ob)
@@ -84,22 +83,18 @@
              (gateway (transient-arg-value "g=" args)))
          (setq kubectl-current-aws-profile aws-profile)
          (setq kubectl-current-context context)
-         (setq kubectl-current-namespace namespace)
-         (shell-command-to-string (format "kubectl config use-context %s" context))
-         (shell-command-to-string (format "kubectl config set-context --current --namespace %s" namespace))
+
+         ;; (shell-command-to-string (format "kubectl config use-context %s" context))
+         (when namespace
+           (setq kubectl-current-namespace namespace)
+           (shell-command-to-string (format "kubectl config set-context --current --namespace %s" namespace)))
          (setq kubectl-resources-current resources)
          (kubectl--sshuttle-login-synchronous gateway
                                               (apply-partially
                                                (kubectl--aws-okta-login-synchronous
                                                 aws-profile
                                                 'kubectl--make-proxy-process-current))))))]
-   [("G" "Refresh Gateway"
-     (lambda (&optional args)
-       (interactive (list (transient-args 'kubectl-transient-choose-context)))
-       (let ((gateway (transient-arg-value "g=" args)))
-         (kubectl--shuttle-refresh-gateway gateway)))
-     :transient t ;; don't exit the transient just to refresh
-     )]]
+   ]
   )
 
 (defvar kubectl-resources-current-all-ns "pods")

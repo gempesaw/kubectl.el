@@ -1,26 +1,32 @@
+(require 'ini)
+
+(defun kubectl--ini-read (ini-config-alist profile key)
+  (cdr (assoc key (cdr (assoc profile ini-config-alist)))))
+
 (defun kubectl--get-summary ()
   (let* ((kube-config-filename "~/.kube/config")
-         (current-context-name (s-chomp (shell-command-to-string (format "yq eval '.current-context' %s" kube-config-filename))))
-         (current-context (s-split "\n" (s-chomp (shell-command-to-string (format "yq eval '.contexts.[] | select(.name == \"%s\") | .context' %s | grep -v user:" current-context-name kube-config-filename)))))
+         (pd-kubectx-config (ini-decode "~/.pd-kubectx/config"))
+         (ini-profile "DEFAULT")
+         (current-context-name (kubectl--ini-read pd-kubectx-config ini-profile "context"))
+         (current-context (kubectl--ini-read pd-kubectx-config ini-profile "context"))
          (available-contexts (kubectl--get-available-contexts))
          (aws-profiles (kubectl--get-aws-profiles))
-         (parts (--map (s-trim (cadr (s-split-up-to ":" it 1))) current-context))
-
          (context (-concat `(
-                             ("context" ,current-context-name))
-                           (--map (s-split-up-to ": " it 1) current-context)
+                             ("cluster" ,current-context-name))
                            `(("resources" ,(if kubectl-all-namespaces
                                                kubectl-resources-current-all-ns
                                              kubectl-resources-current)))
                            `(("role" ,(format "%s/%s" (getenv "AWS_OKTA_PROFILE") (getenv "AWS_OKTA_ASSUMED_ROLE"))))
-                           `(("expires" ,(kubectl--get-remaining-time)))
+                           `(("pulling" ,(if kubectl-is-pulling "true" "false")))
+                           `(("auto" ,(if kubectl-autorefresh "true" "false")))
+                           ;; `(("expires" ,(kubectl--get-remaining-time)))
                            )))
     (setq kubectl-available-contexts available-contexts
           kubectl-current-context current-context-name
-          kubectl-current-cluster (car parts)
+          kubectl-current-cluster current-context-name
           kubectl-current-namespace (if kubectl-all-namespaces
                                         "All Namespaces"
-                                      (cadr parts))
+                                      (kubectl--ini-read pd-kubectx-config ini-profile "namespace"))
           kubectl-aws-profiles aws-profiles)
     context))
 

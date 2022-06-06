@@ -13,7 +13,7 @@ I wrote this specifically for my use case, and without any concerns for
 portability.
 
 - I liked k9s but I didn't like its keybindings and I couldn't invoke k9s from emacs
-- I use `aws-okta` to auth to my cluster, so this project assumes its usage
+- I some custom wrappers around `aws-okta` to connect to my cluster
 - I wanted to write some transients like magit
 - I wanted a nice header area that kubel doesn't have
 - I wanted to do things to/with CRDs without having to wait for kubernetes-el

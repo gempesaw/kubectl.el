@@ -11,25 +11,26 @@
 
 (defun kubectl--sshuttle-login-synchronous (&optional gateway callback)
   (interactive)
-  (unless callback (setq callback 'ignore))
-  (let* ((process-name "sshuttle-login-synchronous" )
-         (buffer (format "*%s*" process-name))
-         (command (s-split " " (format "sshuttle --verbose --remote %s 10.0.0.0/8" gateway)))
-         (proc nil))
-    (when (get-buffer buffer) (kill-buffer buffer))
-    (setq proc (make-process
-                :name process-name
-                :connection-type 'pipe
-                :buffer buffer
-                :coding 'no-conversion
-                :command command
-                :stderr nil
-                :sentinel (lambda (proc signal)
-                            (kubectl--sshuttle-login-synchronous-callback))
-                :noquery t))
-    (with-current-buffer (get-buffer buffer)
-      (make-variable-buffer-local 'kubectl--sshuttle-login-synchronous-callback)
-      (fset 'kubectl--sshuttle-login-synchronous-callback callback)
-      (special-mode))))
+  ;; (unless callback (setq callback 'ignore))
+  ;; (let* ((process-name "sshuttle-login-synchronous" )
+  ;;        (buffer (format "*%s*" process-name))
+  ;;        (command (s-split " " (format "sshuttle --verbose --remote %s 10.0.0.0/8" gateway)))
+  ;;        (proc nil))
+  ;;   (when (get-buffer buffer) (kill-buffer buffer))
+  ;;   (setq proc (make-process
+  ;;               :name process-name
+  ;;               :connection-type 'pipe
+  ;;               :buffer buffer
+  ;;               :coding 'no-conversion
+  ;;               :command command
+  ;;               :stderr nil
+  ;;               :sentinel (lambda (proc signal)
+  ;;                           (kubectl--sshuttle-login-synchronous-callback))
+  ;;               :noquery t))
+  ;;   (with-current-buffer (get-buffer buffer)
+  ;;     (make-variable-buffer-local 'kubectl--sshuttle-login-synchronous-callback)
+  ;;     (fset 'kubectl--sshuttle-login-synchronous-callback callback)
+  ;;     (special-mode)))
+  )
 
 (provide 'kubectl-sshuttle)

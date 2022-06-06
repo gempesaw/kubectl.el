@@ -17,6 +17,7 @@
 (defvar kubectl-current-namespace "")
 (defvar kubectl-all-namespaces nil)
 (defvar kubectl-current-display "")
+(defvar kubectl-is-pulling "false")
 
 (defvar kubectl-main-buffer-name "*kubectl*")
 (defvar kubectl-resources-default "ds,sts,deploy,po,svc,ing,cm")
@@ -68,6 +69,7 @@
   (interactive)
   (with-current-buffer (get-buffer-create kubectl-main-buffer-name)
     (let ((inhibit-read-only t))
+      (setq kubectl-is-pulling t)
       (kubectl-print-buffer)
       (kubectl-get-resources))))
 
@@ -81,6 +83,7 @@
   (if kubectl-all-namespaces
       (kubectl--run-process (format "kubectl get %s --all-namespaces" kubectl-resources-current-all-ns))
     (kubectl--run-process (format "kubectl get %s" kubectl-resources-current)))
+  (setq kubectl-is-pulling nil)
   (kubectl-maybe-autorefresh))
 
 (defun kubectl-get-namespaces ()
@@ -113,7 +116,8 @@
 (defun kubectl-print-buffer ()
   (with-current-buffer (get-buffer-create kubectl-main-buffer-name)
     (let ((inhibit-read-only t)
-          (context (kubectl--get-summary)))
+          (context (kubectl--get-summary))
+          (point-before-print (point)))
       (erase-buffer)
       (insert (s-join "\n"
                       (--map (s-join
@@ -126,7 +130,7 @@
       (insert "\n\n\n")
       (when (not (eq kubectl-current-display ""))
         (insert kubectl-current-display)
-        (kubectl-goto-first-section)))))
+        (goto-char point-before-print )))))
 
 (defun kubectl-redraw (text-to-display)
   (with-current-buffer (get-buffer-create kubectl-main-buffer-name)
@@ -205,6 +209,7 @@
 (defun kubectl-port-forward (port)
   (interactive "sPort to forward: ")
   (let* ((cmd (format "kubectl port-forward %s %s" (kubectl-current-line-resource-as-string) port)))
+    (message cmd)
     (async-shell-command cmd)))
 
 (defun kubectl-get-yaml-at-point ()

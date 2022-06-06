@@ -4,28 +4,29 @@
 
 (defun kubectl--aws-okta-login-synchronous (aws-profile callback)
   (interactive)
-  (unless callback (setq callback 'ignore))
-  (let* ((process-name "aws-okta-login-synchronous" )
-         (buffer (format "*%s*" process-name))
-         (command (s-split " " (format "aws-okta env %s --mfa-duo-device token" aws-profile)))
-         (proc nil))
-    (when (get-buffer buffer) (kill-buffer buffer))
-    (setq proc (make-process
-                :name process-name
-                :connection-type 'pipe
-                :buffer buffer
-                :coding 'no-conversion
-                :command command
-                :filter 'kubectl--aws-okta-process-filter
-                :stderr nil
-                :sentinel (lambda (proc signal)
-                            (kubectl--aws-okta-setenv proc)
-                            (kubectl--aws-okta-login-synchronous-callback))
-                :noquery t))
-    (with-current-buffer (get-buffer buffer)
-      (make-variable-buffer-local 'kubectl--aws-okta-login-synchronous-callback)
-      (fset 'kubectl--aws-okta-login-synchronous-callback callback)
-      (special-mode))))
+  ;; (unless callback (setq callback 'ignore))
+  ;; (let* ((process-name "aws-okta-login-synchronous" )
+  ;;        (buffer (format "*%s*" process-name))
+  ;;        (command (s-split " " (format "aws-okta env %s --mfa-duo-device token" aws-profile)))
+  ;;        (proc nil))
+  ;;   (when (get-buffer buffer) (kill-buffer buffer))
+  ;;   (setq proc (make-process
+  ;;               :name process-name
+  ;;               :connection-type 'pipe
+  ;;               :buffer buffer
+  ;;               :coding 'no-conversion
+  ;;               :command command
+  ;;               :filter 'kubectl--aws-okta-process-filter
+  ;;               :stderr nil
+  ;;               :sentinel (lambda (proc signal)
+  ;;                           (kubectl--aws-okta-setenv proc)
+  ;;                           (kubectl--aws-okta-login-synchronous-callback))
+  ;;               :noquery t))
+  ;;   (with-current-buffer (get-buffer buffer)
+  ;;     (make-variable-buffer-local 'kubectl--aws-okta-login-synchronous-callback)
+  ;;     (fset 'kubectl--aws-okta-login-synchronous-callback callback)
+  ;;     (special-mode)))
+  )
 
 (defun kubectl--aws-okta-setenv (proc)
   (let* ((process-buffer (process-buffer proc))
