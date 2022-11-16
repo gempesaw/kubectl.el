@@ -8,18 +8,21 @@
 (require 'kubectl-summary)
 (require 'kubectl-aws-okta)
 (require 'kubectl-sshuttle)
+(require 'kubectl-get-resources)
 (require 'kubectl-mode)
 
 ;;;###autoload
 (defun kubectl (prefix)
   (interactive "P")
+
+  (when prefix
+    (kubectl-transient-choose-context))
+
   (let ((cwd (cwd)))
     (with-current-buffer (get-buffer-create kubectl-main-buffer-name)
       (setq buffer-read-only t)
       (switch-to-buffer (current-buffer))
       (cd cwd)
-      (kubectl-mode)
-      (when (not prefix)
-        (kubectl-transient-choose-context)))))
+      (kubectl-mode))))
 
 (provide 'kubectl)

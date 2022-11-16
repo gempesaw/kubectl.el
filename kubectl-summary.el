@@ -1,5 +1,7 @@
 (require 'ini)
 
+(defvar kubectl-all-namespaces nil)
+
 (defun kubectl--ini-read (ini-config-alist profile key)
   (cdr (assoc key (cdr (assoc profile ini-config-alist)))))
 
@@ -10,9 +12,12 @@
          (current-context-name (kubectl--ini-read pd-kubectx-config ini-profile "context"))
          (current-context (kubectl--ini-read pd-kubectx-config ini-profile "context"))
          (available-contexts (kubectl--get-available-contexts))
-         (aws-profiles (kubectl--get-aws-profiles))
+         (namespace (if kubectl-all-namespaces
+                        "All Namespaces"
+                      (kubectl--ini-read pd-kubectx-config ini-profile "namespace")))
          (context (-concat `(
                              ("cluster" ,current-context-name))
+                           `(("namespace", namespace))
                            `(("resources" ,(if kubectl-all-namespaces
                                                kubectl-resources-current-all-ns
                                              kubectl-resources-current)))
@@ -24,10 +29,7 @@
     (setq kubectl-available-contexts available-contexts
           kubectl-current-context current-context-name
           kubectl-current-cluster current-context-name
-          kubectl-current-namespace (if kubectl-all-namespaces
-                                        "All Namespaces"
-                                      (kubectl--ini-read pd-kubectx-config ini-profile "namespace"))
-          kubectl-aws-profiles aws-profiles)
+          kubectl-current-namespace namespace)
     context))
 
 (defun kubectl--get-remaining-time ()

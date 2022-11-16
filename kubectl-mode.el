@@ -7,15 +7,14 @@
 (require 'kubectl-mode-nav)
 (require 'kubectl-summary)
 (require 'kubectl-autorefresh)
+(require 'kubectl-at-point)
 
 (defvar kubectl-available-contexts '())
 (defvar kubectl-available-namespaces '())
 (defvar kubectl-cached-namespaces '())
 (defvar kubectl-current-context "")
-(defvar kubectl-current-aws-profile "")
-(defvar kubectl-current-cluster "")
 (defvar kubectl-current-namespace "")
-(defvar kubectl-all-namespaces nil)
+(defvar kubectl-current-role "")
 (defvar kubectl-current-display "")
 (defvar kubectl-is-pulling "false")
 
@@ -47,7 +46,7 @@
   (define-key kubectl-mode-map (kbd "<return>") 'kubectl-describe-resource-at-point)
 
   (define-key kubectl-mode-map (kbd "f") 'kubectl-port-forward)
-  (define-key kubectl-mode-map (kbd "x") 'kubectl-pod-exec)
+  (define-key kubectl-mode-map (kbd "x") 'kubectl-shell-at-point)
   (define-key kubectl-mode-map (kbd "l") 'kubectl-pod-logs)
 
   (define-key kubectl-mode-map (kbd "n") 'kubectl-next-line)
@@ -74,34 +73,14 @@
       (kubectl-get-resources))))
 
 (defun kubectl--get-available-contexts ()
-  (cdr (s-split "\n" (s-chomp (shell-command-to-string (format "yq eval '.contexts.[].name' %s" "~/.kube/config"))))))
-
-(defun kubectl--get-aws-profiles ()
-  (cdr (reverse (--map (s-chop-suffix "]" it) (s-split "\n" (shell-command-to-string "awk '/^\\[profile/ { print $2}' ~/.aws/config"))))))
-
-(defun kubectl-get-resources ()
-  (if kubectl-all-namespaces
-      (kubectl--run-process (format "kubectl get %s --all-namespaces" kubectl-resources-current-all-ns))
-    (kubectl--run-process (format "kubectl get %s" kubectl-resources-current)))
-  (setq kubectl-is-pulling nil)
-  (kubectl-maybe-autorefresh))
+  (let ((contexts-lookup "~/opt/pd-kubectx-cli/pd_kubectx_cli/clusters.json"))
+    (cdr (s-split "\n" (s-chomp (shell-command-to-string (format "jq -r .clusters[].name < %s" contexts-lookup)))))))
 
 (defun kubectl-get-namespaces ()
-  (kubectl--run-process-bg "kubectl get namespaces" 'kubectl--parse-namespaces))
+  (kubectl--cache-namespaces (--map (s-chop-prefix "> " it) (s-split "\n" (shell-command-to-string "pk ns --list")))))
 
 (defun kubectl--cache-namespaces (namespaces)
   (setq kubectl-cached-namespaces (-uniq (-sort 'string-lessp (-concat namespaces kubectl-cached-namespaces)))))
-
-(defun kubectl--parse-namespaces (process)
-  (let ((buffer (process-buffer process)))
-    (with-current-buffer buffer
-      (setq kubectl-available-namespaces
-            (--filter (and (not (s-equals? "" it))
-                           (not (s-equals? "NAME" it)))
-                      (--map (car (s-split " " it))
-                             (s-split "\n" (buffer-substring-no-properties (point-min) (point-max))))))
-      (kubectl--cache-namespaces kubectl-available-namespaces))
-    (kill-buffer buffer)))
 
 (defun kubectl-get-api-resources ()
   (kubectl--run-process-bg "kubectl api-resources" 'kubectl--parse-api-resources))
@@ -164,68 +143,20 @@
   (interactive "sCommand to run: kubectl ")
   (kubectl--run-process-and-pop (format "kubectl %s" command)))
 
-(defun kubectl-choose-resource (resource)
-  (interactive (list (completing-read (format "Resource to query for: (%s)" kubectl-resources-current) (-concat kubectl-api-abbreviations kubectl-api-resource-names nil t))))
-  (if (s-equals? resource "")
-      (setq kubectl-resources-current kubectl-resources-default)
-    (let ((new-resources (s-join "," `(,kubectl-resources-current ,resource))))
-      (setq kubectl-resources-current new-resources)))
-  (kubectl-get-resources))
+;; (defun kubectl-choose-resource (resource)
+;;   (interactive (list (completing-read (format "Resource to query for: (%s)" kubectl-resources-current) (-concat kubectl-api-abbreviations kubectl-api-resource-names nil t))))
+;;   (if (s-equals? resource "")
+;;       (setq kubectl-resources-current kubectl-resources-default)
+;;     (let ((new-resources (s-join "," `(,kubectl-resources-current ,resource))))
+;;       (setq kubectl-resources-current new-resources)))
+;;   (kubectl-get-resources))
 
 (defun kubectl-choose-namespace (ns)
-  (interactive (list (completing-read (format "namespace to switch to: [%s]" kubectl-current-namespace) kubectl-available-namespaces nil nil)))
+  (interactive (list (completing-read (format "namespace to switch to: [%s]" kubectl-current-namespace) kubectl-cached-namespaces nil nil)))
   (when (not (s-blank-p ns))
-    (shell-command-to-string (format "kubectl config set-context --current --namespace %s" ns))
+    (shell-command-to-string (format "pk ns %s" ns))
     (setq kubectl-current-display ""
           kubectl-all-namespaces (s-blank-p ns))
     (kubectl-get-resources)))
-
-(defun kubectl-update-context (context)
-  (when (not (s-blank-p context))
-    (shell-command-to-string (format "kubectl config use-context %s" context))
-    (setq kubectl-current-display "")
-    (kubectl-get-namespaces)
-    (kubectl-get-api-resources)
-    (kubectl-init)))
-
-(defun kubectl-pod-exec ()
-  (interactive)
-  (let ((thing-at-point (car (s-split " " (substring-no-properties (current-line-contents))))))
-    (kubectl--do-to-thing-at-point (format "aws-okta exec %s -- kubectl exec -it %s -- sh" kubectl-current-aws-profile thing-at-point))))
-
-(defun kubectl-pod-logs ()
-  (interactive)
-  (let ((thing-at-point (car (s-split " " (substring-no-properties (current-line-contents))))))
-    (kubectl--do-to-thing-at-point (format "kubectl logs --tail=50 -f %s" thing-at-point))))
-
-(defun kubectl--do-to-thing-at-point (command)
-  (interactive)
-  (let* (
-         (buf nil))
-    (setq buf (create-new-shell-here))
-    (select-window (display-buffer buf))
-    (insert command)))
-
-(defun kubectl-port-forward (port)
-  (interactive "sPort to forward: ")
-  (let* ((cmd (format "kubectl port-forward %s %s" (kubectl-current-line-resource-as-string) port)))
-    (message cmd)
-    (async-shell-command cmd)))
-
-(defun kubectl-get-yaml-at-point ()
-  (interactive)
-  (kubectl--run-process-and-pop (format "kubectl get %s --output yaml" (kubectl-current-line-resource-as-string))))
-
-(defun kubectl-delete-resource-at-point ()
-  (interactive)
-  (let* ((resource-at-point (kubectl-current-line-resource-as-string))
-         (prompt (format "Confirm DELETE %s (cluster: %s | context: %s | namespace: %s) ?"
-                         resource-at-point
-                         kubectl-current-cluster
-                         kubectl-current-context
-                         kubectl-current-namespace))
-         (bpr-process-mode 'kubectl-command-mode))
-    (when (y-or-n-p prompt)
-      (bpr-spawn (format "kubectl delete %s" resource-at-point)))))
 
 (provide 'kubectl-mode)
