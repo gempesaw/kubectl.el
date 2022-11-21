@@ -74,7 +74,7 @@
 
 (defun kubectl--get-available-contexts ()
   (let ((contexts-lookup "~/opt/pd-kubectx-cli/pd_kubectx_cli/clusters.json"))
-    (cdr (s-split "\n" (s-chomp (shell-command-to-string (format "jq -r .clusters[].name < %s" contexts-lookup)))))))
+    (s-split "\n" (s-chomp (shell-command-to-string (format "jq -r .clusters[].name < %s" contexts-lookup))))))
 
 (defun kubectl-get-namespaces ()
   (kubectl--cache-namespaces (--map (s-chop-prefix "> " it) (s-split "\n" (shell-command-to-string "pk ns --list")))))
@@ -108,8 +108,16 @@
                              context)))
       (insert "\n\n\n")
       (when (not (eq kubectl-current-display ""))
-        (insert kubectl-current-display)
+        (insert (kubectl--colorize-percentages kubectl-current-display))
         (goto-char point-before-print )))))
+
+(defun kubectl--colorize-percentages (content)
+  (--> content
+       (s-split "\n" it)
+       (--map (if (s-matches-p "%" it)
+                  it
+                it) it)
+       (s-join "\n" it)))
 
 (defun kubectl-redraw (text-to-display)
   (with-current-buffer (get-buffer-create kubectl-main-buffer-name)

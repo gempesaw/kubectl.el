@@ -11,20 +11,18 @@
          (ini-profile "DEFAULT")
          (current-context-name (kubectl--ini-read pd-kubectx-config ini-profile "context"))
          (current-context (kubectl--ini-read pd-kubectx-config ini-profile "context"))
+         (role (kubectl--ini-read pd-kubectx-config ini-profile "aws_okta_assumed_role"))
          (available-contexts (kubectl--get-available-contexts))
          (namespace (if kubectl-all-namespaces
                         "All Namespaces"
                       (kubectl--ini-read pd-kubectx-config ini-profile "namespace")))
          (context (-concat `(
-                             ("cluster" ,current-context-name))
-                           `(("namespace", namespace))
+                             ("context" ,(format "%s | %s | %s" (kubectl--cluster-color current-context-name) namespace role)))
+                           `(("session" ,(kubectl--get-remaining-time)))
                            `(("resources" ,(if kubectl-all-namespaces
                                                kubectl-resources-current-all-ns
                                              kubectl-resources-current)))
-                           `(("role" ,(format "%s/%s" (getenv "AWS_OKTA_PROFILE") (getenv "AWS_OKTA_ASSUMED_ROLE"))))
-                           `(("pulling" ,(if kubectl-is-pulling "true" "false")))
                            `(("auto" ,(if kubectl-autorefresh "true" "false")))
-                           ;; `(("expires" ,(kubectl--get-remaining-time)))
                            )))
     (setq kubectl-available-contexts available-contexts
           kubectl-current-context current-context-name
@@ -32,8 +30,19 @@
           kubectl-current-namespace namespace)
     context))
 
+(defun kubectl--cluster-color (context)
+  (let ((color (if (s-matches-p "playground" context)
+                   "fairy-mint-800"
+                 (if (s-matches-p "prod-" context)
+                     "fairy-carrot-600"
+                   "fairy-gold-800"))))
+    (kubectl--color context color)))
+
 (defun kubectl--get-remaining-time ()
-  (let* ((remaining-time (time-subtract (seconds-to-time (string-to-number (getenv "AWS_OKTA_SESSION_EXPIRATION"))) (current-time)))
+  (let* ((pd-kubectx-config (ini-decode "~/.pd-kubectx/config"))
+         (ini-profile "DEFAULT")
+         (expiration (kubectl--ini-read pd-kubectx-config ini-profile "aws_okta_session_expiration"))
+         (remaining-time (time-subtract (seconds-to-time (string-to-number expiration)) (current-time)))
          (expired (eq (car remaining-time) -1))
          (remaining-minutes (/ (cadr remaining-time ) 60))
          (color (cond
