@@ -12,9 +12,10 @@
 
 (defun kubectl--node-debug (current-line-resource-name)
   (interactive)
-  (kubectl--open-shell-with-command
-   (format "pk exec %s kube-system -- kubectl debug %s -it --image=public.ecr.aws/lts/ubuntu:20.04_stable"
-           kubectl-current-context current-line-resource-name)))
+  (let ((node-ip-string (cadr (s-split "/\\|\\." current-line-resource-name))))
+    (kubectl--open-shell-with-command
+     (format "kubectl debug --namespace kube-system %s -it --image=public.ecr.aws/lts/ubuntu:20.04_stable --attach=false && pk ns kube-system && pk shell %s"
+             current-line-resource-name node-ip-string))))
 
 (defun kubectl-pod-logs ()
   (interactive)
