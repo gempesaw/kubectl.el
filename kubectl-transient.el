@@ -24,7 +24,7 @@
 
   ["In a single namespace"
    [("r" (lambda () (format "Reset to default (%s)" kubectl-resources-default)) kubectl-reset-resources)
-    ("a" "Add a resource to the defaults" kubectl-add-resource)
+    ("a" (lambda () (format "add to Current (%s)" kubectl-resources-current)) kubectl-add-current-resource)
     ("c" (lambda () (format "add to Current (%s)" kubectl-resources-current)) kubectl-add-current-resource)
     ("n" "Use the current list as the new default" kubectl-set-current-as-default)
     ("s" "Specify your own list" kubectl-set-resource)]
@@ -56,11 +56,15 @@
     :always-read t
     :init-value (lambda (ob)
                   (setf (slot-value ob 'value) kubectl-current-namespace))
-    :choices (lambda (complete-me filter-p completion-type) kubectl-cached-namespaces))
+    :reader (lambda (prompt initial-input history)
+              (completing-read prompt kubectl-cached-namespaces nil nil initial-input history)))
    ("r" "Resources" "r="
     :always-read t
+    ;; :multi-value t
     :init-value (lambda (ob)
-                  (setf (slot-value ob 'value) kubectl-resources-current)))
+                  (setf (slot-value ob 'value) kubectl-resources-current))
+    :reader (lambda (prompt initial-input history)
+              (s-join "," (completing-read-multiple prompt kubectl-api-resource-names nil nil initial-input history))))
    ("a" "AWS Role" "a="
     :always-read t
     :init-value (lambda (ob)
