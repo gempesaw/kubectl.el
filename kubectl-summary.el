@@ -22,7 +22,7 @@
                            `(("resources" ,(if kubectl-all-namespaces
                                                kubectl-resources-current-all-ns
                                              kubectl-resources-current)))
-                           `(("auto" ,(if kubectl-autorefresh "true" "false")))
+                           `(("watch" ,(if (process-live-p kubectl--watch-process ) "true" "false")))
                            )))
     (setq kubectl-available-contexts available-contexts
           kubectl-current-context current-context-name
@@ -43,13 +43,9 @@
          (ini-profile "DEFAULT")
          (expiration (kubectl--ini-read pd-kubectx-config ini-profile "aws_okta_session_expiration"))
          (remaining-time (time-subtract (seconds-to-time (string-to-number expiration)) (current-time)))
-         (expired (eq (car remaining-time) -1))
-         (remaining-minutes (/ (cadr remaining-time ) 60))
-         (color (cond
-                 ((and (> remaining-minutes 15) (not expired)) "fairy-mint-800")
-                 ((and (< remaining-minutes 15) (not expired)) "fairy-gold-800")
-                 (expired "fairy-carrot-600"))))
-    (kubectl--color (format "%s%sm" (if expired "-" "") (number-to-string remaining-minutes)) color)))
+         (expired (<= (car remaining-time) -1))
+         (remaining-minutes (/ (cadr remaining-time ) 60)))
+    (format "%s%sm" (if expired "-" "") (number-to-string remaining-minutes))))
 
 (defun kubectl--color (text color)
   (let* ((colors '(("fairy-sky-100"      "#def8ff")

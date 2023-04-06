@@ -1,3 +1,12 @@
+(defun kubectl-copy-resource-at-point ()
+  (interactive)
+  (let ((resource-at-point (s-trim (kubectl-current-line-resource-as-string))))
+    (kill-new resource-at-point)
+    (message resource-at-point)))
+
+(defun current-line-contents ()
+  (buffer-substring-no-properties (line-beginning-position) (line-end-position)))
+
 (defun kubectl-shell-at-point ()
   (interactive)
   (let* ((current-line-resource-name (car (s-split " " (substring-no-properties (current-line-contents)))))
@@ -14,7 +23,7 @@
   (interactive)
   (let ((node-ip-string (cadr (s-split "/\\|\\." current-line-resource-name))))
     (kubectl--open-shell-with-command
-     (format "kubectl debug --namespace kube-system %s -it --image=public.ecr.aws/lts/ubuntu:20.04_stable --attach=false && pk ns kube-system && pk shell %s"
+     (format "kubectl debug --namespace kube-system node/%s -it --image=public.ecr.aws/lts/ubuntu:20.04_stable --attach=false && pk ns kube-system && pk shell %s"
              current-line-resource-name node-ip-string))))
 
 (defun kubectl-pod-logs ()

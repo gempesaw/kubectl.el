@@ -8,19 +8,22 @@
 (require 'kubectl-summary)
 (require 'kubectl-autorefresh)
 (require 'kubectl-at-point)
+(require 'kubectl-draw)
+(require 'kubectl-font-lock-keywords)
 
 (defvar kubectl-available-contexts '())
 (defvar kubectl-available-namespaces '())
 (defvar kubectl-cached-namespaces '())
 (defvar kubectl-current-context "")
 (defvar kubectl-current-namespace "")
+(defvar kubectl-previous-current-namespace "")
 (defvar kubectl-current-role "")
 (defvar kubectl-current-display "")
 (defvar kubectl-is-pulling "false")
 
 (defvar kubectl-main-buffer-name "*kubectl*")
-(defvar kubectl-resources-default "ds,sts,deploy,po,svc,ing,cm")
-(defvar kubectl-resources-current "ds,sts,deploy,po,svc,ing,cm")
+(defvar kubectl-resources-default "ro,ds,sts,deploy,po,svc,ing,cm")
+(defvar kubectl-resources-current "ro,ds,sts,deploy,po,svc,ing,cm")
 (defvar kubectl-api-abbreviations '())
 (defvar kubectl-api-resource-names '())
 (defvar kubectl--command-options "")
@@ -34,12 +37,16 @@
   (setq truncate-lines t)
   (setq buffer-read-only t)
   (define-key kubectl-mode-map (kbd "r") 'kubectl-transient-choose-resource)
+  (define-key kubectl-mode-map (kbd "t") 'kubectl-toggle-capacity)
+  (define-key kubectl-mode-map (kbd "|") 'kubectl-transient-grep)
   (define-key kubectl-mode-map (kbd "A") 'kubectl-transient-choose-resource-all-ns)
   (define-key kubectl-mode-map (kbd "R") 'kubectl-transient-choose-resource)
   (define-key kubectl-mode-map (kbd "G") 'kubectl-toggle-autorefresh)
   (define-key kubectl-mode-map (kbd "N") 'kubectl-choose-namespace)
   (define-key kubectl-mode-map (kbd "C") 'kubectl-transient-choose-context)
 
+  (define-key kubectl-mode-map (kbd "w") 'kubectl-copy-resource-at-point)
+  (define-key kubectl-mode-map (kbd "0 w") 'kubectl-copy-line-at-point)
   (define-key kubectl-mode-map (kbd "e") 'kubectl-edit-resource-at-point)
   (define-key kubectl-mode-map (kbd "k") 'kubectl-delete-resource-at-point)
   (define-key kubectl-mode-map (kbd "o") 'kubectl-get-yaml-at-point)
@@ -61,7 +68,7 @@
 
   (define-key kubectl-mode-map (kbd "?") 'kubectl-transient-help)
   (define-key kubectl-mode-map (kbd "h") 'kubectl-transient-help)
-  )
+  (font-lock-add-keywords nil kubectl-font-lock-keywords))
 
 
 (defun kubectl-init ()
@@ -92,55 +99,19 @@
         (setq kubectl-api-abbreviations (--map (cadr it) (--filter (eq (length it) 5) lines)))
         (setq kubectl-api-resource-names (--map (car it) lines))))))
 
-(defun kubectl-print-buffer ()
-  (with-current-buffer (get-buffer-create kubectl-main-buffer-name)
-    (let ((inhibit-read-only t)
-          (context (kubectl--get-summary))
-          (point-before-print (point)))
-      (erase-buffer)
-      (insert (s-join "\n"
-                      (--map (s-join
-                              " " (-concat `(,(s-pad-right 10 " " (format "%s:" (s-capitalize (car it)))))
-                                           `(,(if (and kubectl-all-namespaces
-                                                       (s-equals-p (car it) "namespace"))
-                                                  "All Namespaces"
-                                                (cadr it)))))
-                             context)))
-      (insert "\n\n\n")
-      (when (not (eq kubectl-current-display ""))
-        (insert (kubectl--colorize-percentages kubectl-current-display))
-        (goto-char point-before-print )))))
-
-(defun kubectl--colorize-percentages (content)
-  (--> content
-       (s-split "\n" it)
-       (--map (if (s-matches-p "%" it)
-                  it
-                it) it)
-       (s-join "\n" it)))
-
-(defun kubectl-redraw (text-to-display)
-  (with-current-buffer (get-buffer-create kubectl-main-buffer-name)
-    (let ((inhibit-read-only t))
-      (setq kubectl-current-display text-to-display)
-      (kubectl-print-buffer))))
-
-(defun kubectl-show-log-buffer ()
-  (interactive)
-  (pop-to-buffer (kubectl--get-process-buffer))
-  (goto-char (point-max)))
-
 (defun kubectl-current-line-resource-as-string ()
   (let* ((parts (s-split " +" (substring-no-properties (current-line-contents))))
          (resource (if kubectl-all-namespaces (cadr parts) (car parts)))
          (namespace-flag (if kubectl-all-namespaces (format "--namespace %s" (car parts)) ""))
-         (type-prefix (if (and kubectl-all-namespaces
-                               (not (s-contains-p "," kubectl-resources-current-all-ns)))
-                          kubectl-resources-current-all-ns
-                        (if (and (not kubectl-all-namespaces)
-                                 (not (s-contains-p "," kubectl-resources-current)))
-                            kubectl-resources-current
-                          ""))))
+         (type-prefix (if (s-matches-p "ip.*compute.internal" resource)
+                          "node"
+                        (if (and kubectl-all-namespaces
+                                 (not (s-contains-p "," kubectl-resources-current-all-ns)))
+                            kubectl-resources-current-all-ns
+                          (if (and (not kubectl-all-namespaces)
+                                   (not (s-contains-p "," kubectl-resources-current)))
+                              kubectl-resources-current
+                            "")))))
     (format "%s %s %s" namespace-flag type-prefix resource)))
 
 (defun kubectl-describe-resource-at-point ()
@@ -164,7 +135,8 @@
   (when (not (s-blank-p ns))
     (shell-command-to-string (format "pk ns %s" ns))
     (setq kubectl-current-display ""
-          kubectl-all-namespaces (s-blank-p ns))
+          kubectl-all-namespaces (s-blank-p ns)
+          kubectl-current-namespace ns)
     (kubectl-get-resources)))
 
 (provide 'kubectl-mode)

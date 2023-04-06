@@ -31,17 +31,75 @@
    ]
 
   ["All namespaces"
-   ("C" (lambda () (format "add to Current (%s)" kubectl-resources-current-all-ns)) kubectl-add-current-resource-all-ns)
-   ("S" "Specify your own list" kubectl-set-resource-all-ns)
+   [("C" (lambda () (format "add to Current (%s)" kubectl-resources-current-all-ns)) kubectl-add-current-resource-all-ns)
+    ("S" "Specify your own list" kubectl-set-resource-all-ns)
+    ("R" "Refresh / use current" (lambda (&optional args)
+                                   (interactive)
+                                   (setq kubectl-all-namespaces t
+                                         kubectl-previous-namespace kubectl-current-namespace)
+                                   (kubectl-get-resources)))]
+   [("k" "kube-capacity" kubectl--kube-capacity)]
    ]
   )
+
+(progn
+  (defvar kubectl--transient-grep-needle nil)
+  (defvar kubectl--transient-grep-invert nil)
+
+  (transient-define-argument kubectl--transient-grep-value ()
+    :description "what grep value to filter with"
+    :class 'transient-option
+    :key "g"
+    :argument ""
+    :init-value (lambda (ob) (setf (slot-value ob 'value) kubectl--transient-grep-needle)))
+
+  (transient-define-prefix kubectl-transient-grep ()
+    "Filter the displayed resources"
+    ["Options"
+     (kubectl--transient-grep-value)
+     ("-v" "invert match" "--invert-match"
+      :init-value (lambda (ob) (setf (slot-value ob 'value) kubectl--transient-grep-invert)))
+     ]
+    ["Actions"
+     [("SPC" "Apply filter"
+       (lambda (&optional args)
+         (interactive (list (transient-args transient-current-command)))
+         (let ((needle (car args))
+               (invert (transient-arg-value "--invert-match" args)))
+           (if invert
+               (setq kubectl--transient-grep-invert "--invert-match")
+             (setq kubectl--transient-grep-invert nil))
+
+           (when (s-equals-p needle "--invert-match")
+             (setq needle nil))
+           (setq kubectl--transient-grep-needle needle)
+           (kubectl-print-buffer))))
+      ("<return>" "Apply filter"
+       (lambda (&optional args)
+         (interactive (list (transient-args transient-current-command)))
+         (let ((needle (car args))
+               (invert (transient-arg-value "--invert-match" args)))
+           (if invert
+               (setq kubectl--transient-grep-invert "--invert-match")
+             (setq kubectl--transient-grep-invert nil))
+
+           (when (s-equals-p needle "--invert-match")
+             (setq needle nil))
+           (setq kubectl--transient-grep-needle needle)
+           (kubectl-print-buffer))))]]))
+
 
 (transient-define-prefix kubectl-transient-choose-resource-all-ns ()
   "Choose resources to query for in all namespaces"
   ["All namespaces"
    ("c" (lambda () (format "add to Current (%s)" kubectl-resources-current-all-ns)) kubectl-add-current-resource-all-ns)
    ("s" "Specify your own list" kubectl-set-resource-all-ns)
-   ])
+   ("r" "Refresh / use current" (lambda (&optional args)
+                                  (interactive)
+                                  (setq kubectl-all-namespaces t
+                                        kubectl-previous-namespace kubectl-current-namespace
+                                        )
+                                  (kubectl-get-resources)))])
 
 (transient-define-prefix kubectl-transient-choose-context ()
   "Choose cluster and AWS profile alias"
@@ -51,7 +109,8 @@
     :always-read t
     :init-value (lambda (ob)
                   (setf (slot-value ob 'value) kubectl-current-context))
-    :choices (lambda (complete-me filter-p completion-type) (kubectl--get-available-contexts)))
+    :reader (lambda (prompt initial-input history)
+              (completing-read prompt (kubectl--get-available-contexts) nil nil initial-input history)))
    ("n" "Namespace" "ns="
     :always-read t
     :init-value (lambda (ob)
@@ -69,7 +128,17 @@
     :always-read t
     :init-value (lambda (ob)
                   (setf (slot-value ob 'value) kubectl-current-role))
-    :choices (lambda (complete-me filter-p completion-type) '("" "terraform/kubernetes-admin" "read-only"))
+    :reader (lambda (prompt initial-input history)
+              (completing-read prompt (->> (shell-command-to-string "pk role --list")
+                                           (funcall (lambda (it) (s-split "\n" it t)))
+                                           (--filter (not (s-matches-p "^>" it)))
+                                           (s-join "\n")
+                                           (json-parse-string)
+                                           (ht-map (lambda (key value)
+                                                     (mapcar (lambda (rn) (format "%s" rn)) value)))
+                                           (-flatten)
+                                           (-distinct))
+                               nil nil initial-input history))
     )
    ]
   ["Connect"
@@ -85,8 +154,10 @@
              (shell-command-to-string (format "pk role %s" aws-role))
            (shell-command-to-string "pk role --clear"))
          (with-current-buffer buf
+           (kubectl-redraw-harmless)
+           (setq kubectl--pk-buffer-p nil)
+           (setq-local kubectl--pk-buffer-p t)
            (add-hook 'comint-output-filter-functions 'kubectl--comint-shell-filter-function)
-           (rename-buffer kubectl--pk-buffer-name)
            (select-window (display-buffer buf))
            (insert (format "pk connect %s %s" context namespace))
            (comint-send-input))
@@ -97,19 +168,16 @@
          ;; (kubectl-init)
          )))]])
 
-(defvar kubectl--pk-buffer-name "*kubectl--pk-buffer*")
-
 (defun kubectl--comint-shell-filter-function (string)
   (let ((name (buffer-name)))
-    (when (and (s-equals? name kubectl--pk-buffer-name)
-               (s-contains? "Success" string))
-      (remove-hook 'comint-output-filter-functions 'kubectl--comint-shell-filter-function)
-      (with-current-buffer kubectl--pk-buffer-name
-        (delete-window (get-buffer-window kubectl--pk-buffer-name))
-        (run-at-time 10 nil 'kill-buffer kubectl--pk-buffer-name))
-      (kubectl-init)
-      (run-at-time 5 nil 'kubectl-get-namespaces)
-      (run-at-time 5 nil 'kubectl-get-api-resources))))
+    (with-current-buffer name
+      (when (and kubectl--pk-buffer-p (s-contains? "Success" string))
+        (remove-hook 'comint-output-filter-functions 'kubectl--comint-shell-filter-function)
+        (delete-window (get-buffer-window name))
+        (run-at-time 3 nil 'kill-buffer name)
+        (kubectl-init)
+        (run-at-time 10 nil 'kubectl-get-namespaces)
+        (run-at-time 10 nil 'kubectl-get-api-resources)))))
 
 (defvar kubectl-resources-current-all-ns "pods")
 
@@ -117,6 +185,8 @@
   (interactive)
   (setq kubectl-resources-default kubectl-resources-current
         kubectl-all-namespaces nil)
+  (when (s-matches-p kubectl-current-namespace "All ")
+    (setq kubectl-current-namespace kubectl-previous-namespace))
   (kubectl-get-resources))
 
 (defun kubectl-reset-resources ()
@@ -147,12 +217,16 @@
   (interactive (list (completing-read (format "Resource to query for: %s," kubectl-resources-current-all-ns) (-concat kubectl-api-abbreviations kubectl-api-resource-names) nil nil)))
   (setq kubectl-resources-current-all-ns (format "%s,%s" kubectl-resources-current-all-ns resource)
         kubectl-all-namespaces t)
+  (when (not (s-matches-p "All" kubectl-current-namespace))
+    (setq kubectl-previous-namespace kubectl-current-namespace))
   (kubectl-get-resources))
 
 (defun kubectl-set-resource-all-ns (resource)
   (interactive (list (completing-read (format "Resource to query for: " kubectl-resources-current) (-concat kubectl-api-abbreviations kubectl-api-resource-names nil t))))
   (setq kubectl-resources-current-all-ns resource
         kubectl-all-namespaces t)
+  (when (not (s-matches-p "All" kubectl-current-namespace))
+    (setq kubectl-previous-namespace kubectl-current-namespace))
   (kubectl-get-resources))
 
 (provide 'kubectl-transient)

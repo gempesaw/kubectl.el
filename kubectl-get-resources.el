@@ -9,12 +9,41 @@
 
 (defvar kubectl--get-fancy-command (format "%s%s %%s \"%%s\" \"%%s\" \"%%s\"" kubectl--my-directory kubectl--get-fancy-filename))
 
+(defvar kubectl--watch-process nil)
 (defun kubectl-get-resources ()
   (if kubectl-all-namespaces
-      (kubectl--run-process (format "kubectl get %s --all-namespaces" kubectl-resources-current-all-ns))
-    (kubectl-get-resources-for-namespace))
-  (setq kubectl-is-pulling nil)
-  (kubectl-maybe-autorefresh))
+      (progn
+        (when (timerp kubectl--refresh-current-display-timer)
+          (cancel-timer kubectl--refresh-current-display-timer))
+        (kubectl--run-process (format "kubectl get %s --all-namespaces" kubectl-resources-current-all-ns)))
+    (when (process-live-p kubectl--watch-process) (delete-process kubectl--watch-process))
+    (setq kubectl--watch-process (start-process "kubectl-watch" kubectl-process-buffer-name "python" (f-expand (f-join kubectl--my-directory "watch.py")) kubectl-resources-current kubectl-current-namespace))
+    (kubectl--refresh-current-display)
+    (kubectl--refresh-kcnodes)
+    (kubectl--get-resources-cancel)))
+
+(defun kubectl--refresh-current-display ()
+  (let* ((data-directory (f-expand (f-join kubectl--my-directory "data")))
+         (resources (s-split "," kubectl-resources-current))
+         (contents (->> resources
+                        (--map (let ((filename (f-expand (f-join data-directory it))))
+                                 (if (f-exists-p filename)
+                                     (f-read-text filename)
+                                   nil)))
+                        (-remove-item "")
+                        (s-join "\n"))))
+    (when (and (process-live-p kubectl--watch-process)
+               (not (s-equals-p contents kubectl-current-display)))
+      (kubectl-redraw contents))
+    (run-with-timer 2 nil 'kubectl--refresh-current-display)))
+
+(defun kubectl--get-resources-cancel ()
+  "cancel the watch cuz the window is unfocused"
+  (when (process-live-p kubectl--watch-process)
+    (when (not (get-buffer-window kubectl-main-buffer-name))
+      (message "kubectl.el: cancelling watch")
+      (delete-process kubectl--watch-process))
+    (run-with-timer 60 nil 'kubectl--get-resources-cancel)))
 
 (defun kubectl-get-resources-for-namespace ()
   (let ((resources (--map (if (or (s-equals-p it "pod")
@@ -32,6 +61,8 @@
     (kubectl-get-fancy-pods before-resources after-resources)))
 
 (defun kubectl-get-fancy-pods (before-resources after-resources)
+  (when (s-matches-p "All" kubectl-current-namespace)
+    (setq kubectl-current-namespace kubectl-previous-namespace))
   (kubectl--run-process (format kubectl--get-fancy-command
                                 kubectl-current-namespace
                                 kubectl--command-options
