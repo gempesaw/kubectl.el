@@ -184,7 +184,8 @@
 (defun kubectl-set-current-as-default ()
   (interactive)
   (setq kubectl-resources-default kubectl-resources-current
-        kubectl-all-namespaces nil)
+        kubectl-all-namespaces nil
+        kubectl-current-namespace kubectl-previous-namespace)
   (when (s-matches-p kubectl-current-namespace "All ")
     (setq kubectl-current-namespace kubectl-previous-namespace))
   (kubectl-get-resources))
@@ -192,25 +193,29 @@
 (defun kubectl-reset-resources ()
   (interactive)
   (setq kubectl-resources-current kubectl-resources-default
-        kubectl-all-namespaces nil)
+        kubectl-all-namespaces nil
+        kubectl-current-namespace kubectl-previous-namespace)
   (kubectl-get-resources))
 
 (defun kubectl-add-resource (resource)
   (interactive (list (completing-read (format "Resource to query for: %s," kubectl-resources-current) (-concat kubectl-api-abbreviations kubectl-api-resource-names) nil nil)))
   (setq kubectl-resources-current (format "%s,%s" kubectl-resources-default resource)
-        kubectl-all-namespaces nil)
+        kubectl-all-namespaces nil
+        kubectl-current-namespace kubectl-previous-namespace)
   (kubectl-get-resources))
 
 (defun kubectl-add-current-resource (resource)
   (interactive (list (completing-read (format "Resource to query for: %s," kubectl-resources-current) (-concat kubectl-api-abbreviations kubectl-api-resource-names) nil nil)))
   (setq kubectl-resources-current (format "%s,%s" kubectl-resources-current resource)
-        kubectl-all-namespaces nil)
+        kubectl-all-namespaces nil
+        kubectl-current-namespace kubectl-previous-namespace)
   (kubectl-get-resources))
 
 (defun kubectl-set-resource (resource)
   (interactive (list (completing-read (format "Resource to query for: " kubectl-resources-current) (-concat kubectl-api-abbreviations kubectl-api-resource-names) nil nil)))
   (setq kubectl-resources-current resource
-        kubectl-all-namespaces nil)
+        kubectl-all-namespaces nil
+        kubectl-current-namespace kubectl-previous-namespace)
   (kubectl-get-resources))
 
 (defun kubectl-add-current-resource-all-ns (resource)

@@ -23,7 +23,7 @@
   (interactive)
   (let ((node-ip-string (cadr (s-split "/\\|\\." current-line-resource-name))))
     (kubectl--open-shell-with-command
-     (format "kubectl debug --namespace kube-system node/%s -it --image=public.ecr.aws/lts/ubuntu:20.04_stable --attach=false && pk ns kube-system && pk shell %s"
+     (format "kubectl debug --namespace kube-system node/%s --stdin --tty --image=748801462010.dkr.ecr.us-west-1.amazonaws.com/pk-debug:nonroot"
              current-line-resource-name node-ip-string))))
 
 (defun kubectl-pod-logs ()

@@ -25,6 +25,7 @@ update_pod_lock = Lock()
 
 def main():
     arg = sys.argv[1]
+
     print(sys.argv)
     print(DATA_DIRECTORY)
     shutil.rmtree(DATA_DIRECTORY)
@@ -43,6 +44,11 @@ def main():
 
 def is_pod(resource):
     return resource in ["po", "pod", "pods"]
+
+
+def is_all_namespaces():
+    namespace = sys.argv[2]
+    return namespace == "All Namespaces"
 
 
 def update_pod_output(resource):
@@ -73,9 +79,12 @@ def update_pod_output(resource):
 
 
 def watch(resource):
-    p = kubectl["get", resource, "--watch", "--show-kind=true", "-owide"].popen()
+    command = ["get", resource, "--watch", "--show-kind=true", "-owide"]
+    if is_all_namespaces():
+        command += ["--all-namespaces"]
+    p = kubectl[command].popen()
 
-    if is_pod(resource):
+    if is_pod(resource) and not is_all_namespaces():
         headers = re.split("\\s{3,}", p.stdout.readline().decode("utf-8").strip())
         table.field_names = [
             "NAME",
@@ -111,7 +120,10 @@ def watch(resource):
         with open(f"{DATA_DIRECTORY}/{resource}", "w") as f:
             while True:
                 line = p.stdout.readline().decode("utf-8")
-                name = line.split(" ")[0]
+                if is_all_namespaces():
+                    [_, name, *_] = re.split("\\s{3,}", line, 3)
+                else:
+                    name = line.split(" ")[0]
                 cache[name] = line
 
                 f.seek(0)
@@ -123,6 +135,9 @@ def watch(resource):
 
 
 def poll_pod_metrics(resource):
+    if is_all_namespaces():
+        return
+
     namespace = sys.argv[2]
     metrics = json.loads(
         kube_capacity[

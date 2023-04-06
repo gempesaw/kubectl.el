@@ -11,20 +11,26 @@
 
 (defvar kubectl--watch-process nil)
 (defun kubectl-get-resources ()
-  (if kubectl-all-namespaces
-      (progn
-        (when (timerp kubectl--refresh-current-display-timer)
-          (cancel-timer kubectl--refresh-current-display-timer))
-        (kubectl--run-process (format "kubectl get %s --all-namespaces" kubectl-resources-current-all-ns)))
-    (when (process-live-p kubectl--watch-process) (delete-process kubectl--watch-process))
-    (setq kubectl--watch-process (start-process "kubectl-watch" kubectl-process-buffer-name "python" (f-expand (f-join kubectl--my-directory "watch.py")) kubectl-resources-current kubectl-current-namespace))
+  (when (process-live-p kubectl--watch-process)
+    (delete-process kubectl--watch-process))
+  (let ((resources (if kubectl-all-namespaces
+                       kubectl-resources-current-all-ns
+                     kubectl-resources-current))
+        (namespace (if kubectl-all-namespaces
+                       "All Namespaces"
+                     kubectl-current-namespace)))
+    (setq kubectl--watch-process
+          (start-process
+           "kubectl-watch"
+           kubectl-process-buffer-name
+           "python" (f-expand (f-join kubectl--my-directory "watch.py")) resources namespace))
     (kubectl--refresh-current-display)
     (kubectl--refresh-kcnodes)
     (kubectl--get-resources-cancel)))
 
 (defun kubectl--refresh-current-display ()
   (let* ((data-directory (f-expand (f-join kubectl--my-directory "data")))
-         (resources (s-split "," kubectl-resources-current))
+         (resources (s-split "," (if kubectl-all-namespaces kubectl-resources-current-all-ns kubectl-resources-current)))
          (contents (->> resources
                         (--map (let ((filename (f-expand (f-join data-directory it))))
                                  (if (f-exists-p filename)
