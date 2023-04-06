@@ -17,13 +17,13 @@
 
 (defun kubectl--pod-exec (current-line-resource-name)
   (interactive)
-  (kubectl--open-shell-with-command (format "pk shell %s" (s-join "-" (-take-last 2 (s-split "-" current-line-resource-name))))))
+  (kubectl--open-shell-with-command (format "pk shell %s" (s-right 5 current-line-resource-name))))
 
 (defun kubectl--node-debug (current-line-resource-name)
   (interactive)
   (let ((node-ip-string (cadr (s-split "/\\|\\." current-line-resource-name))))
     (kubectl--open-shell-with-command
-     (format "kubectl debug --namespace kube-system node/%s --stdin --tty --image=748801462010.dkr.ecr.us-west-1.amazonaws.com/pk-debug:nonroot"
+     (format "kubectl debug --namespace kube-system %s --stdin --tty --image=748801462010.dkr.ecr.us-west-1.amazonaws.com/pk-debug:nonroot"
              current-line-resource-name node-ip-string))))
 
 (defun kubectl-pod-logs ()
