@@ -6,8 +6,6 @@
 (require 'kubectl-transient)
 (require 'kubectl-mode-nav)
 (require 'kubectl-summary)
-(require 'kubectl-aws-okta)
-(require 'kubectl-sshuttle)
 (require 'kubectl-get-resources)
 (require 'kubectl-mode)
 

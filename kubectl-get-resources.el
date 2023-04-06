@@ -5,10 +5,6 @@
                       ;; File is being evaluated using, for example, `eval-buffer'.
                       default-directory)))
 
-(defvar kubectl--get-fancy-filename "kubectl-get-fancy.sh")
-
-(defvar kubectl--get-fancy-command (format "%s%s %%s \"%%s\" \"%%s\" \"%%s\"" kubectl--my-directory kubectl--get-fancy-filename))
-
 (defvar kubectl--watch-process nil)
 (defun kubectl-get-resources ()
   (when (process-live-p kubectl--watch-process)
@@ -50,29 +46,5 @@
       (message "kubectl.el: cancelling watch")
       (delete-process kubectl--watch-process))
     (run-with-timer 60 nil 'kubectl--get-resources-cancel)))
-
-(defun kubectl-get-resources-for-namespace ()
-  (let ((resources (--map (if (or (s-equals-p it "pod")
-                                  (s-equals-p it "pods"))
-                              "po"
-                            it)
-                          (s-split "," kubectl-resources-current))))
-    (if (-contains-p resources "po")
-        (kubectl-get-resources-for-namespace-with-pods resources)
-      (kubectl--run-process (format "kubectl get %s -owide" kubectl-resources-current)))))
-
-(defun kubectl-get-resources-for-namespace-with-pods (resources)
-  (let ((before-resources (--take-while (not (s-equals-p "po" it)) resources))
-        (after-resources (reverse (--take-while (not (s-equals-p "po" it)) (reverse resources)))))
-    (kubectl-get-fancy-pods before-resources after-resources)))
-
-(defun kubectl-get-fancy-pods (before-resources after-resources)
-  (when (s-matches-p "All" kubectl-current-namespace)
-    (setq kubectl-current-namespace kubectl-previous-namespace))
-  (kubectl--run-process (format kubectl--get-fancy-command
-                                kubectl-current-namespace
-                                kubectl--command-options
-                                (s-join "," before-resources)
-                                (s-join "," after-resources))))
 
 (provide 'kubectl-get-resources)
