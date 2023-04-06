@@ -1,17 +1,28 @@
 (require 'bpr)
 (require 'kubectl-process)
 
-(defvar-local kubectl-edit--resource "")
 (defvar kubectl-edit--edit-buffer)
+
+(defvar kubectl-edit--folder (f-expand (f-join kubectl--my-directory "tmp")))
+(defvar kubectl-edit--current-resource nil)
 
 (define-derived-mode kubectl-edit-mode yaml-mode "kubectl-edit"
   (define-key kubectl-edit-mode-map (kbd "C-c C-c") 'kubectl-edit-apply)
   (define-key kubectl-edit-mode-map (kbd "M-s") 'kubectl-edit-chide)
   (define-key kubectl-edit-mode-map (kbd "C-c C-k") 'kubectl-edit-cancel))
 
+
+
 (defun kubectl-edit-resource-at-point ()
   (interactive)
-  (kubectl--run-process-and-pop (format "kubectl get %s --output yaml" (kubectl-current-line-resource-as-string)) t))
+  (setq kubectl-edit--current-resource (s-trim (kubectl-current-line-resource-as-string)))
+  (let* ((yaml (shell-command-to-string (format "kubectl get %s --output yaml" (kubectl-current-line-resource-as-string))))
+         (name (apply 'format "%s/%s-%s.yaml" (-insert-at 1 (format-time-string "%s" (current-time)) (s-split "/" kubectl-edit--current-resource))))
+         (filename (f-join kubectl-edit--folder name)))
+    (f-mkdir (f-dirname filename))
+    (f-write-text yaml 'utf-8 filename)
+    (find-file-other-window filename)
+    (kubectl-edit-mode)))
 
 (defun kubectl-edit-apply ()
   (interactive)
@@ -19,12 +30,10 @@
                           kubectl-current-cluster
                           kubectl-current-context
                           kubectl-current-namespace))
-    (let* ((new-resource (buffer-substring-no-properties (point-min) (point-max)))
-           (cmd-from-buffer (s-chop-prefix "*" (s-trim (car (s-split "--output" (buffer-name))))))
-           (filename (make-temp-file (s-replace "/" "." (car (--filter (s-matches-p "/" it) (s-split " " cmd-from-buffer)))) nil nil new-resource))
-           (command (format "kubectl apply -f %s" filename))
+    (let* ((command (format "kubectl apply -f %s" buffer-file-name))
            (bpr-on-success 'kubectl-edit--cleanup)
            (bpr-process-mode 'kubectl-command-mode))
+      (save-buffer)
       (setq kubectl-edit--edit-buffer (current-buffer))
       (kubectl--update-process-buffer-string command t)
       (bpr-spawn command))))
