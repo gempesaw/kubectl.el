@@ -54,6 +54,7 @@
 
   (define-key kubectl-mode-map (kbd "f") 'kubectl-port-forward)
   (define-key kubectl-mode-map (kbd "x") 'kubectl-shell-at-point)
+  (define-key kubectl-mode-map (kbd "d") 'kubectl-debug-at-point)
   (define-key kubectl-mode-map (kbd "l") 'kubectl-pod-logs)
 
   (define-key kubectl-mode-map (kbd "n") 'kubectl-next-line)
@@ -102,17 +103,8 @@
 (defun kubectl-current-line-resource-as-string ()
   (let* ((parts (s-split " +" (substring-no-properties (current-line-contents))))
          (resource (if kubectl-all-namespaces (cadr parts) (car parts)))
-         (namespace-flag (if kubectl-all-namespaces (format "--namespace %s" (car parts)) ""))
-         (type-prefix (if (s-matches-p "ip.*compute.internal" resource)
-                          "node"
-                        (if (and kubectl-all-namespaces
-                                 (not (s-contains-p "," kubectl-resources-current-all-ns)))
-                            kubectl-resources-current-all-ns
-                          (if (and (not kubectl-all-namespaces)
-                                   (not (s-contains-p "," kubectl-resources-current)))
-                              kubectl-resources-current
-                            "")))))
-    (format "%s %s %s" namespace-flag type-prefix resource)))
+         (namespace-flag (if kubectl-all-namespaces (format "--namespace %s" (car parts)) "")))
+    (format "%s %s" namespace-flag resource)))
 
 (defun kubectl-describe-resource-at-point ()
   (interactive)
@@ -122,18 +114,19 @@
   (interactive "sCommand to run: kubectl ")
   (kubectl--run-process-and-pop (format "kubectl %s" command)))
 
-;; (defun kubectl-choose-resource (resource)
-;;   (interactive (list (completing-read (format "Resource to query for: (%s)" kubectl-resources-current) (-concat kubectl-api-abbreviations kubectl-api-resource-names nil t))))
-;;   (if (s-equals? resource "")
-;;       (setq kubectl-resources-current kubectl-resources-default)
-;;     (let ((new-resources (s-join "," `(,kubectl-resources-current ,resource))))
-;;       (setq kubectl-resources-current new-resources)))
-;;   (kubectl-get-resources))
-
 (defun kubectl-choose-namespace (ns)
-  (interactive (list (completing-read (format "namespace to switch to: [%s]" kubectl-current-namespace) kubectl-cached-namespaces nil nil)))
+  (interactive (list (completing-read
+                      (format "namespace to switch to: [%s]" kubectl-current-namespace)
+                      (->> "kubectl get namespaces -oname | sort"
+                           (shell-command-to-string)
+                           (s-trim)
+                           (s-split "\n")
+                           (--map (cadr (s-split "/" it))))
+                      nil
+                      nil)))
   (when (not (s-blank-p ns))
-    (shell-command-to-string (format "pk ns %s" ns))
+    (message "hi")
+    (message (shell-command-to-string (format "pk ns %s" ns)))
     (setq kubectl-current-display ""
           kubectl-all-namespaces (s-blank-p ns)
           kubectl-current-namespace ns)

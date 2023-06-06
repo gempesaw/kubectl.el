@@ -7,6 +7,7 @@
 (require 'kubectl-mode-nav)
 (require 'kubectl-summary)
 (require 'kubectl-get-resources)
+(require 'kubectl-kube-capacity)
 (require 'kubectl-mode)
 
 ;;;###autoload

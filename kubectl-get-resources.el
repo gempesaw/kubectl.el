@@ -19,7 +19,7 @@
           (start-process
            "kubectl-watch"
            kubectl-process-buffer-name
-           "python" (f-expand (f-join kubectl--my-directory "watch.py")) resources namespace))
+           "~/.asdf/installs/python/3.10.8/bin/python" (f-expand (f-join kubectl--my-directory "watch.py")) resources namespace))
     (kubectl--refresh-current-display)
     (kubectl--refresh-kcnodes)
     (kubectl--get-resources-cancel)))
@@ -35,7 +35,8 @@
                         (-remove-item "")
                         (s-join "\n"))))
     (when (and (process-live-p kubectl--watch-process)
-               (not (s-equals-p contents kubectl-current-display)))
+               (not (s-equals-p contents kubectl-current-display))
+               (not (s-equals-p (s-trim contents) "")))
       (kubectl-redraw contents))
     (run-with-timer 2 nil 'kubectl--refresh-current-display)))
 

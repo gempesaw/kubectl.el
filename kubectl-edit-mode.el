@@ -1,5 +1,6 @@
 (require 'bpr)
 (require 'kubectl-process)
+(require 'kubectl-get-resources)
 
 (defvar kubectl-edit--edit-buffer)
 

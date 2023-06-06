@@ -15,9 +15,20 @@
         (kubectl--pod-exec current-line-resource-name)
       (kubectl--node-debug current-line-resource-name))))
 
-(defun kubectl--pod-exec (current-line-resource-name)
+(defun kubectl-debug-at-point ()
   (interactive)
-  (kubectl--open-shell-with-command (format "pk shell %s" (s-right 5 current-line-resource-name))))
+  (let* ((current-line-resource-name (car (s-split " " (substring-no-properties (current-line-contents)))))
+         (current-line-resource-kind (car (s-split "/" current-line-resource-name))))
+    (if (s-equals-p current-line-resource-kind "pod")
+        (kubectl--pod-exec current-line-resource-name "debug")
+      (kubectl--node-debug current-line-resource-name))))
+
+(defun kubectl--pod-exec (current-line-resource-name &optional command)
+  (interactive)
+  (let ((cmd (if command
+                 command
+               "shell")))
+    (kubectl--open-shell-with-command (format "pk %s %s" cmd (s-right 5 current-line-resource-name)))))
 
 (defun kubectl--node-debug (current-line-resource-name)
   (interactive)

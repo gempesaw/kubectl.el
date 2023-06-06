@@ -79,9 +79,11 @@ def update_pod_output(resource):
 
 
 def watch(resource):
-    command = ["get", resource, "--watch", "--show-kind=true", "-owide"]
+    command = ["get", resource, "--show-kind=true", "-owide"]
     if is_all_namespaces():
         command += ["--all-namespaces"]
+    else:
+        command += ["--watch"]
     p = kubectl[command].popen()
 
     if is_pod(resource) and not is_all_namespaces():
@@ -198,7 +200,13 @@ def poll_node_metrics():
 
 
 def watch_nodes():
-    p = kubectl["get", "nodes", "--watch", "--show-kind=true", "-owide"].popen()
+    p = kubectl[
+        "get",
+        "nodes",
+        "--watch",
+        "--show-kind=true",
+        "--label-columns=node.kubernetes.io/instance-type,topology.kubernetes.io/zone,app.pagerduty.com/taec-node-group-name,app.pagerduty.com/repo",
+    ].popen()
 
     headers = re.split("\\s{3,}", p.stdout.readline().decode("utf-8").strip())
     node_table.field_names = [
