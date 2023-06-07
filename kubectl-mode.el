@@ -44,6 +44,8 @@
   (define-key kubectl-mode-map (kbd "G") 'kubectl-toggle-autorefresh)
   (define-key kubectl-mode-map (kbd "N") 'kubectl-choose-namespace)
   (define-key kubectl-mode-map (kbd "C") 'kubectl-transient-choose-context)
+  (define-key kubectl-mode-map (kbd "s") 'kubectl-sort-by)
+
 
   (define-key kubectl-mode-map (kbd "w") 'kubectl-copy-resource-at-point)
   (define-key kubectl-mode-map (kbd "0 w") 'kubectl-copy-line-at-point)
@@ -125,8 +127,7 @@
                       nil
                       nil)))
   (when (not (s-blank-p ns))
-    (message "hi")
-    (message (shell-command-to-string (format "pk ns %s" ns)))
+    (shell-command-to-string (format "pk ns %s" ns))
     (setq kubectl-current-display ""
           kubectl-all-namespaces (s-blank-p ns)
           kubectl-current-namespace ns)

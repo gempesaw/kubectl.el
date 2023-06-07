@@ -9,17 +9,14 @@
 (defun kubectl-get-resources ()
   (when (process-live-p kubectl--watch-process)
     (delete-process kubectl--watch-process))
-  (let ((resources (if kubectl-all-namespaces
-                       kubectl-resources-current-all-ns
-                     kubectl-resources-current))
-        (namespace (if kubectl-all-namespaces
-                       "All Namespaces"
-                     kubectl-current-namespace)))
+  (let ((resources (if kubectl-all-namespaces kubectl-resources-current-all-ns kubectl-resources-current))
+        (namespace (if kubectl-all-namespaces "All Namespaces" kubectl-current-namespace))
+        (sort-column (if kubectl-current-sort-column kubectl-current-sort-column "NAME")))
     (setq kubectl--watch-process
           (start-process
            "kubectl-watch"
            kubectl-process-buffer-name
-           "~/.asdf/installs/python/3.10.8/bin/python" (f-expand (f-join kubectl--my-directory "watch.py")) resources namespace))
+           "~/.asdf/installs/python/3.10.8/bin/python" (f-expand (f-join kubectl--my-directory "watch.py")) resources namespace sort-column))
     (kubectl--refresh-current-display)
     (kubectl--refresh-kcnodes)
     (kubectl--get-resources-cancel)))
@@ -47,5 +44,20 @@
       (message "kubectl.el: cancelling watch")
       (delete-process kubectl--watch-process))
     (run-with-timer 60 nil 'kubectl--get-resources-cancel)))
+
+(defvar kubectl-current-sort-column "NAME")
+(defun kubectl-sort-by (sort-column)
+  (interactive (list (completing-read
+                      (format "column to sort by: [%s]" kubectl-current-sort-column)
+                      (->> kubectl-current-display
+                           (s-split "\n")
+                           (--filter (s-starts-with? "NAME" it))
+                           (--map (s-split "[ ]+" it))
+                           (-flatten)
+                           (-uniq))
+                      nil
+                      nil)))
+  (setq kubectl-current-sort-column sort-column)
+  (kubectl-get-resources))
 
 (provide 'kubectl-get-resources)

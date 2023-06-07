@@ -23,6 +23,9 @@ table.right_padding_width = 2
 update_pod_lock = Lock()
 
 
+SORT_COLUMN = sys.argv[3]
+
+
 def main():
     arg = sys.argv[1]
 
@@ -56,17 +59,15 @@ def update_pod_output(resource):
         table.clear_rows()
 
         for pod_name in pod_kubectl_cache.keys():
-            line_metrics = ["" for _ in range(8)]
+            line_metrics = ["" for _ in range(6)]
             if pod_name in pod_metrics_cache:
                 line_metrics = [
-                    pod_metrics_cache[pod_name]["cpu"]["utilization"],
-                    pod_metrics_cache[pod_name]["cpu"]["utilization_percent"],
                     pod_metrics_cache[pod_name]["cpu"]["requests"],
                     pod_metrics_cache[pod_name]["cpu"]["limits"],
-                    pod_metrics_cache[pod_name]["memory"]["utilization"],
-                    pod_metrics_cache[pod_name]["memory"]["utilization_percent"],
+                    pod_metrics_cache[pod_name]["cpu"]["utilization"],
                     pod_metrics_cache[pod_name]["memory"]["requests"],
                     pod_metrics_cache[pod_name]["memory"]["limits"],
+                    pod_metrics_cache[pod_name]["memory"]["utilization"],
                 ]
 
             table.add_row([pod_name] + line_metrics + pod_kubectl_cache[pod_name][1:])
@@ -90,16 +91,16 @@ def watch(resource):
         headers = re.split("\\s{3,}", p.stdout.readline().decode("utf-8").strip())
         table.field_names = [
             "NAME",
-            "CUse",
-            "CPer",
             "CReq",
             "CLim",
-            "MUse",
-            "MPer",
+            "CUse",
             "MReq",
             "MLim",
+            "MUse",
         ] + headers[1:]
-        table.sortby = "NAME"
+        table.sortby = SORT_COLUMN
+        if SORT_COLUMN in SORT_FUNCTIONS:
+            table.sort_key = SORT_FUNCTIONS[SORT_COLUMN]
 
         while True:
             line = re.split("\\s{3,}", p.stdout.readline().decode("utf-8").strip())
@@ -159,16 +160,14 @@ def poll_pod_metrics(resource):
                     "cpu": {
                         "requests": pod["cpu"]["requests"],
                         "limits": pod["cpu"]["limits"],
-                        "utilization": pod["cpu"]["utilization"],
-                        "utilization_percent": f"{math.floor(cpu_util / cpu_request * 100)}%"
+                        "utilization": f"{pod['cpu']['utilization']} ({math.floor(cpu_util / cpu_request * 100)}%)"
                         if cpu_request > 0
                         else "",
                     },
                     "memory": {
                         "requests": pod["memory"]["requests"],
                         "limits": pod["memory"]["limits"],
-                        "utilization": pod["memory"]["utilization"],
-                        "utilization_percent": f"{math.floor(memory_util / memory_request * 100)}%"
+                        "utilization": f"{pod['memory']['utilization']} ({math.floor(memory_util / memory_request * 100)}%)"
                         if memory_request > 0
                         else "",
                     },
@@ -211,14 +210,16 @@ def watch_nodes():
     headers = re.split("\\s{3,}", p.stdout.readline().decode("utf-8").strip())
     node_table.field_names = [
         "NAME",
-        "CPU REQUESTS",
-        "CPU LIMITS",
-        "CPU UTIL",
-        "MEMORY REQUESTS",
-        "MEMORY LIMITS",
-        "MEMORY UTIL",
+        "CReq",
+        "CLim",
+        "CUse",
+        "MReq",
+        "MLim",
+        "MUse",
     ] + headers[1:]
-    node_table.sortby = "NAME"
+    node_table.sortby = SORT_COLUMN
+    if SORT_COLUMN in SORT_FUNCTIONS:
+        node_table.sort_key = SORT_FUNCTIONS[SORT_COLUMN]
 
     while True:
         [name, *status] = re.split(
@@ -249,6 +250,41 @@ def update_node_output():
             f.write(node_table.get_string())
             f.write("\n")
             f.truncate()
+
+
+def sort_age(vals):
+    # first item is the sort_by column, the rest of the items is the entire row
+    # data
+    matches = re.search(
+        "(?:(?P<days>\\d+)d)?(?:(?P<hours>\\d+)h)?(?:(?P<minutes>\\d+)m)?(?:(?P<seconds>\\d+)s)?",
+        vals[0],
+    )
+    if matches:
+        return (
+            int(matches.group("days") or 0) * 24 * 60 * 60
+            + int(matches.group("hours") or 0) * 60 * 60
+            + int(matches.group("minutes") or 0) * 60
+            + int(matches.group("seconds") or 0)
+        )
+    return 0
+
+
+def sort_with_percent(vals):
+    try:
+        return int(re.sub("\\D", "", vals[0].split(" ")[0]))
+    except:
+        return 0
+
+
+SORT_FUNCTIONS = {
+    "AGE": sort_age,
+    "CReq": sort_with_percent,
+    "CLim": sort_with_percent,
+    "CUse": sort_with_percent,
+    "MReq": sort_with_percent,
+    "MLim": sort_with_percent,
+    "MUse": sort_with_percent,
+}
 
 
 main()
