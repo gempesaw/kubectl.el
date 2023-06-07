@@ -1,8 +1,9 @@
+(defvar kubectl-replace-buffer " *kubectl--replace-buffer*")
+
 (defun kubectl-print-buffer ()
-  (with-current-buffer (get-buffer-create kubectl-main-buffer-name)
-    (let ((inhibit-read-only t)
-          (context (kubectl--get-summary))
-          (old-point (point)))
+  (let ((inhibit-read-only t)
+        (context (kubectl--get-summary)))
+    (with-current-buffer (get-buffer-create kubectl-replace-buffer)
       (erase-buffer)
       (insert (s-join "\n"
                       (--map (s-join
@@ -29,20 +30,17 @@
                                   (s-matches-p kubectl--transient-grep-needle it))
                                 (s-equals-p "" it)))
                   (s-join "\n")))
-          (insert kubectl-current-display))
-        (goto-char old-point)
-        nil))))
+          (insert kubectl-current-display))))
+
+    (with-current-buffer (get-buffer-create kubectl-main-buffer-name)
+      (replace-buffer-contents kubectl-replace-buffer))))
 
 (defun kubectl-redraw (text-to-display)
-  (with-current-buffer (get-buffer-create kubectl-main-buffer-name)
-    (let ((inhibit-read-only t))
-      (setq kubectl-current-display text-to-display)
-      (kubectl-print-buffer))))
+  (setq kubectl-current-display text-to-display)
+  (kubectl-print-buffer))
 
 (defun kubectl-redraw-harmless ()
-  (with-current-buffer (get-buffer-create kubectl-main-buffer-name)
-    (let ((inhibit-read-only t))
-      (kubectl-print-buffer))))
+  (kubectl-print-buffer))
 
 (defun kubectl-show-log-buffer ()
   (interactive)
