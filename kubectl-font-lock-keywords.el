@@ -80,10 +80,13 @@
       ("Session: +1..*" 0 '(:foreground ,fairy-carrot-600))
       ("Session: +-.*" 0 '(:foreground ,fairy-carrot-600))
 
-      ("Context: +eks-stg-playground.*? " 0 '(:foreground ,fairy-mint-800))
-      ("Context: +eks-stg-.*? " 0 '(:foreground ,fairy-sky-600))
-      ("Context: +eks-lt-.*? " 0 '(:foreground ,fairy-sky-600))
-      ("Context: +eks-prod.*? " 0 '(:foreground ,fairy-carrot-600))
+      ("Context: +eks-stg-playground[^ ]+ " 0 '(:foreground ,fairy-mint-800))
+      ("Context: +eks-stg-[^ ]+ " 0 '(:foreground ,fairy-sky-600))
+      ("Context: +eks-lt-[^ ]+ " 0 '(:foreground ,fairy-sky-600))
+      ("Context: +eks-prod[^ ]+ " 0 '(:foreground ,fairy-carrot-600))
+      ("Context: +eks-euprod[^ ]+ " 0 '(:foreground ,fairy-carrot-600))
+
+      ("kubernetes-admin" 0 '(:foreground ,fairy-carrot-600))
 
       ("\\b\\([0-9]\\|[12][0-9]\\)%\\b" 0 '(:foreground ,fairy-mint-600))
       ("\\b\\([345][0-9]%\\)\\b" 1 '(:foreground ,fairy-gold-600))
