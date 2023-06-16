@@ -85,8 +85,11 @@ def watch(resource):
         command += ["--all-namespaces"]
     else:
         command += ["--watch"]
-    p = kubectl[command].popen()
 
+    if not is_pod(resource):
+        command += ["--output-watch-events=true"]
+
+    p = kubectl[command].popen()
     if is_pod(resource) and not is_all_namespaces():
         headers = re.split("\\s{3,}", p.stdout.readline().decode("utf-8").strip())
         table.field_names = [
@@ -120,17 +123,52 @@ def watch(resource):
             update_pod_output(resource)
     else:
         cache = {}
+        resource_table = PrettyTable()
+        resource_table.set_style(PLAIN_COLUMNS)
+        resource_table.align = "l"
+        resource_table.right_padding_width = 2
+
         with open(f"{DATA_DIRECTORY}/{resource}", "w") as f:
+            headers = re.split("\\s{3,}", p.stdout.readline().decode("utf-8").strip())
+            headers_columns = len(headers)
+
+            # ignore the first column EVENT
+            resource_table.field_names = headers[1:]
+            resource_table.sortby = SORT_COLUMN
+            if SORT_COLUMN in SORT_FUNCTIONS:
+                resource_table.sort_key = SORT_FUNCTIONS[SORT_COLUMN]
+
             while True:
-                line = p.stdout.readline().decode("utf-8")
+                [event, *line] = re.split(
+                    "\\s{3,}", p.stdout.readline().decode("utf-8").strip()
+                )
                 if is_all_namespaces():
-                    [_, name, *_] = re.split("\\s{3,}", line, 3)
+                    # event, namespace, name, ...
+                    name = line[1]
                 else:
-                    name = line.split(" ")[0]
-                cache[name] = line
+                    # event, name
+                    name = line[0]
+
+                line_columns = len(line)
+                if line_columns < headers_columns:
+                    missing = headers_columns - line_columns - 1
+                    buffer = ["" for _ in range(missing)]
+                    line = line[0:-1] + buffer + [line[-1]]
+
+                if event in ["ADDED", "MODIFIED"]:
+                    cache[name] = line
+
+                if event == "DELETED":
+                    del cache[name]
+
+                resource_table.clear_rows()
+
+                for name in cache.keys():
+                    resource_table.add_row([name] + cache[name][1:])
 
                 f.seek(0)
-                f.write("".join(cache.values()))
+                f.write(resource_table.get_string())
+                f.write("\n")
                 f.truncate()
 
                 if p.poll() != None:
