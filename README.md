@@ -25,7 +25,7 @@ bunch of shell commands. so you must have some binaries installed. here's how
 you could do it with homebrew.
 
 ```
-brew install yq kubectl aws-okta
+brew install yq kubectl aws-okta robscott/tap/kube-capacity
 ```
 
 another uh, it depends on some Emacs packages too. I forget how to make the
@@ -48,6 +48,12 @@ git clone https://github.com/gempesaw/kubectl.el.git ~/somewhere/kubectl.el
 
 ```elisp
 (add-to-list 'load-path (expand-file-name "~/somewhere/kubectl.el"))
+```
+
+Also install some python dependencies?:
+
+```bash
+pip install plumbum prettytable
 ```
 
 and then uhhh call `kubectl`, if you want. I use a keychord for it :shrug:

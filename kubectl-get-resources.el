@@ -16,7 +16,7 @@
           (start-process
            "kubectl-watch"
            kubectl-process-buffer-name
-           "~/.asdf/installs/python/3.10.8/bin/python" (f-expand (f-join kubectl--my-directory "watch.py")) resources namespace sort-column))
+           "python" (f-expand (f-join kubectl--my-directory "watch.py")) resources namespace sort-column))
     (kubectl--refresh-current-display)
     (kubectl--refresh-kcnodes)
     (kubectl--get-resources-cancel)))
