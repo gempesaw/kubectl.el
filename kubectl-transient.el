@@ -38,8 +38,11 @@
   ["Presets"
    [
     ("a" (lambda () (format "all (%s)" kubectl-resources-default)) kubectl-reset-resources)
+    ("b" "rBac (roles,rolebindings)" kubectl-set-resources-rbac)
+    ("B" "rBac (clusterroles,clusterrolebindings)" kubectl-set-resources-cluster-rbac)
     ("j" "jobs (cronjobs,jobs,pods)" kubectl-set-resources-jobs)
     ("e" "externalsecrets (clusterexternalsecrets,clustersecretstores,externalsecrets,secretstores,secrets)" kubectl-set-resources-secrets)
+
     ("p" "all no pods (ro,ds,sts,deploy,svc,ing,cm)" kubectl-set-resources-all-no-pods)
     ]
    ]
@@ -199,6 +202,20 @@
 (defun kubectl-reset-resources ()
   (interactive)
   (setq kubectl-resources-current kubectl-resources-default
+        kubectl-all-namespaces nil
+        kubectl-current-namespace kubectl-previous-namespace)
+  (kubectl-get-resources))
+
+(defun kubectl-set-resources-cluster-rbac ()
+  (interactive)
+  (setq kubectl-resources-current "clusterroles,clusterrolebindings"
+        kubectl-all-namespaces nil
+        kubectl-current-namespace kubectl-previous-namespace)
+  (kubectl-get-resources))
+
+(defun kubectl-set-resources-rbac ()
+  (interactive)
+  (setq kubectl-resources-current "roles,rolebindings,sa"
         kubectl-all-namespaces nil
         kubectl-current-namespace kubectl-previous-namespace)
   (kubectl-get-resources))

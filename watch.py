@@ -1,17 +1,16 @@
 #!/usr/bin/env python
 
-from plumbum.cmd import kubectl, kube_capacity
-
-from prettytable import PrettyTable, PLAIN_COLUMNS
-from threading import Thread, Lock
-import sys
-import math
 import json
+import math
 import os
-import shutil
-import time
 import re
+import shutil
+import sys
+import time
+from threading import Lock, Thread
 
+from plumbum.cmd import kube_capacity, kubectl
+from prettytable import PLAIN_COLUMNS, PrettyTable
 
 DATA_DIRECTORY = "/Users/dgempesaw/opt/kubectl.el/data"
 pod_metrics_cache = {}
@@ -79,6 +78,14 @@ def update_pod_output(resource):
             f.truncate()
 
 
+def get_sort_column(table, default_sort_column="NAME"):
+    headers = table.field_names
+    if SORT_COLUMN in headers:
+        return SORT_COLUMN
+
+    return default_sort_column
+
+
 def watch(resource):
     command = ["get", resource, "--show-kind=true", "-owide"]
     if is_all_namespaces():
@@ -101,9 +108,10 @@ def watch(resource):
             "MLim",
             "MUse",
         ] + headers[1:]
-        table.sortby = SORT_COLUMN
-        if SORT_COLUMN in SORT_FUNCTIONS:
-            table.sort_key = SORT_FUNCTIONS[SORT_COLUMN]
+        sort_column = get_sort_column(table)
+        table.sortby = sort_column
+        if sort_column in SORT_FUNCTIONS:
+            table.sort_key = SORT_FUNCTIONS[sort_column]
 
         while True:
             line = re.split("\\s{3,}", p.stdout.readline().decode("utf-8").strip())
@@ -134,9 +142,10 @@ def watch(resource):
 
             # ignore the first column EVENT
             resource_table.field_names = headers[1:]
-            resource_table.sortby = SORT_COLUMN
-            if SORT_COLUMN in SORT_FUNCTIONS:
-                resource_table.sort_key = SORT_FUNCTIONS[SORT_COLUMN]
+            sort_column = get_sort_column(table)
+            resource_table.sortby = sort_column
+            if sort_column in SORT_FUNCTIONS:
+                resource_table.sort_key = SORT_FUNCTIONS[sort_column]
 
             while True:
                 [event, *line] = re.split(
@@ -242,7 +251,7 @@ def watch_nodes():
         "nodes",
         "--watch",
         "--show-kind=true",
-        "--label-columns=node.kubernetes.io/instance-type,topology.kubernetes.io/zone,app.pagerduty.com/taec-node-group-name,app.pagerduty.com/repo",
+        "--label-columns=topology.kubernetes.io/zone,node.kubernetes.io/instance-type,app.pagerduty.com/repo,app.pagerduty.com/taec-node-group-name",
     ].popen()
 
     headers = re.split("\\s{3,}", p.stdout.readline().decode("utf-8").strip())
@@ -255,9 +264,10 @@ def watch_nodes():
         "MLim",
         "MUse",
     ] + headers[1:]
-    node_table.sortby = SORT_COLUMN
-    if SORT_COLUMN in SORT_FUNCTIONS:
-        node_table.sort_key = SORT_FUNCTIONS[SORT_COLUMN]
+    sort_column = get_sort_column(table)
+    node_table.sortby = sort_column
+    if sort_column in SORT_FUNCTIONS:
+        node_table.sort_key = SORT_FUNCTIONS[sort_column]
 
     while True:
         [name, *status] = re.split(
@@ -276,18 +286,28 @@ def update_node_output():
         node_table.clear_rows()
 
         for node_name in node_status_cache.keys():
+            if "fargate" in node_name:
+                continue
+
             metrics = ["" for _ in range(6)]
             if node_name in node_metrics_cache:
-                metrics = node_metrics_cache[node_name]
+                for index, metric in enumerate(node_metrics_cache[node_name]):
+                    metrics[index] = metric
+
             status = node_status_cache[node_name]
 
-            node_table.add_row([node_name] + metrics + status)
+            row = [node_name] + metrics + status
+            header_length = len(node_table.field_names)
+            while header_length > len(row):
+                row = row + [""]
 
-        with open(f"{DATA_DIRECTORY}/kcnodes", "w") as f:
-            f.seek(0)
-            f.write(node_table.get_string())
-            f.write("\n")
-            f.truncate()
+            node_table.add_row(row)
+
+            with open(f"{DATA_DIRECTORY}/kcnodes", "w") as f:
+                f.seek(0)
+                f.write(node_table.get_string())
+                f.write("\n")
+                f.truncate()
 
 
 def sort_age(vals):
