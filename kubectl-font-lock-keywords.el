@@ -88,6 +88,12 @@
 
       ("kubernetes-admin" 0 '(:foreground ,fairy-carrot-600))
 
+      (" | " 0 '(:foreground ,fairy-mint-600))
+      (" || " 0 '(:foreground ,fairy-mint-600))
+      (" ||| " 0 '(:foreground ,fairy-mint-600))
+      (" |||| " 0 '(:foreground ,fairy-gold-600))
+      (" |||||+" 0 '(:foreground ,fairy-carrot-600))
+
       ("\\b\\([0-9]\\|[12][0-9]\\)%\\b" 0 '(:foreground ,fairy-mint-600))
       ("\\b\\([345][0-9]%\\)\\b" 1 '(:foreground ,fairy-gold-600))
       ("\\b\\([67][0-9]%\\)\\b" 1 '(:foreground ,fairy-grape-600))
@@ -146,8 +152,11 @@
       ("\\b\\(statefulset\\)[^/ ]+/[^ ]+ +\\([0-9]+\\)/\\2" 0 '(:foreground ,fairy-mint-600))
       ("\\b\\(statefulset\\)[^/ ]+/[^ ]+ +[0-9]+/[0-9]+" 0 '(:foreground ,fairy-carrot-600))
 
-      ("^\\(node/ip-[^ ]+\\)\s+[[:digit:]]+m ([0-9]+%)\s+[[:digit:]]+m ([0-9]+%)\s+[[:digit:]]+m (\\([0-9]%\\|[0-3][0-9]%\\))\s+[[:digit:]]+Mi ([0-9]+%)\s+[[:digit:]]+Mi ([0-9]+%)\s+[[:digit:]]+Mi (\\([0-9]%\\|[0-3][0-9]%\\))" 1 '(:foreground ,fairy-sky-600))
-      ("^\\(ip-[^ ]+\\)" 1 '(:foreground ,fairy-gold-600))
+      ("^\\(node/ip-[^ ]+\\).*\\(Ready\\)"
+       (1 '(:foreground ,fairy-sky-600))
+       (2 '(:foreground ,fairy-mint-600))
+       )
+
       ))
 
   (when (get-buffer "*kubectl*")
