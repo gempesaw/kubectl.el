@@ -173,7 +173,34 @@
                kubectl-resources-current resources
                kubectl-current-role aws-role)
          ;; (kubectl-init)
-         )))]])
+         )))
+
+    ("<return>" "Connect"
+     (lambda (&optional args)
+       (interactive (list (transient-args transient-current-command)))
+       (let ((context (transient-arg-value "c=" args))
+             (namespace (transient-arg-value "ns=" args))
+             (resources (transient-arg-value "r=" args))
+             (aws-role (transient-arg-value "a=" args))
+             (buf (create-new-shell-here)))
+         (if aws-role
+             (shell-command-to-string (format "pk role %s" aws-role))
+           (shell-command-to-string "pk role --clear"))
+         (with-current-buffer buf
+           (kubectl-redraw-harmless)
+           (setq kubectl--pk-buffer-p nil)
+           (setq-local kubectl--pk-buffer-p t)
+           (add-hook 'comint-output-filter-functions 'kubectl--comint-shell-filter-function)
+           (select-window (display-buffer buf))
+           (insert (format "pk connect %s %s" context namespace))
+           (comint-send-input))
+         (setq kubectl-current-context context
+               kubectl-current-namespace namespace
+               kubectl-resources-current resources
+               kubectl-current-role aws-role)
+         ;; (kubectl-init)
+         )))
+    ]])
 
 
 
