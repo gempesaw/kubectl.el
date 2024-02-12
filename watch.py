@@ -9,7 +9,7 @@ import sys
 import time
 from threading import Lock, Thread
 
-from plumbum.cmd import kube_capacity, kubectl
+from plumbum.cmd import kube_capacity, kubectl, sort, uniq
 from prettytable import PLAIN_COLUMNS, PrettyTable
 
 DATA_DIRECTORY = "/Users/dgempesaw/opt/kubectl.el/data"
@@ -35,6 +35,7 @@ def main():
     resources = arg.split(",")
 
     Thread(target=poll_node_metrics).start()
+    Thread(target=poll_podcount).start()
     Thread(target=watch_nodes).start()
 
     for resource in resources:
@@ -137,7 +138,15 @@ def watch(resource):
         resource_table.right_padding_width = 2
 
         with open(f"{DATA_DIRECTORY}/{resource}", "w") as f:
-            headers = re.split("\\s{3,}", p.stdout.readline().decode("utf-8").strip())
+            while True:
+                line = p.stdout.readline().decode("utf-8").strip()
+                if line == "":
+                    time.sleep(1)
+                    continue
+                else:
+                    break
+
+            headers = re.split("\\s{3,}", line)
             headers_columns = len(headers)
 
             # ignore the first column EVENT
@@ -226,6 +235,7 @@ def poll_pod_metrics(resource):
 
 
 node_metrics_cache = {}
+node_podcount_cache = {}
 node_status_cache = {}
 node_table = PrettyTable()
 node_table.set_style(PLAIN_COLUMNS)
@@ -234,15 +244,61 @@ node_table.right_padding_width = 2
 update_node_lock = Lock()
 
 
+def poll_podcount():
+    podcount = (
+        kubectl["get pods -A -o custom-columns=node:.spec.nodeName".split(" ")]
+        | sort
+        | uniq["-c"]
+        | sort["-n"]
+    )
+
+    for pc in podcount().split("\n"):
+        if pc.strip() != "":
+            [count, node_name] = re.split(r"\s+", pc.strip())
+            node_podcount_cache[f"node/{node_name}"] = count
+
+    update_node_output()
+    time.sleep(60)
+    poll_podcount()
+
+
 def poll_node_metrics():
     node_metrics = (kube_capacity["--util"]()).split("\n")[1:]
     for node_line in node_metrics:
-        [name, *metrics] = re.split("\\s{3,}", node_line.strip())
-        node_metrics_cache[f"node/{name}"] = metrics
+        # skip the limit ones, we don't care
+        if node_line.strip() != "":
+            [name, creq, _, cuse, mreq, _, muse] = re.split(
+                "\\s{3,}", node_line.strip()
+            )
+            metrics = [make_metric_pretty(m) for m in [creq, cuse, mreq, muse]]
+            node_metrics_cache[f"node/{name}"] = metrics
 
     update_node_output()
     time.sleep(10)
     poll_node_metrics()
+
+
+def make_metric_pretty(metric):
+    resource, percent = metric.split(" ")
+    if "m" in metric:
+        return f"{percent_as_lines(percent)} {round_cpu(resource)}"
+    else:
+        return f"{percent_as_lines(percent)} {round_mem(resource)}"
+
+
+def round_cpu(resource):
+    parts = re.search(r"(\d+)([a-z]+)", resource)
+    return round(int(parts.group(1)) / 1000, 0)
+
+
+def round_mem(resource):
+    parts = re.search(r"(\d+)Mi", resource)
+    return f"{round(int(parts.group(1)) / 1000, 0)}Gi"
+
+
+def percent_as_lines(percent):
+    parts = re.search(r"(\d+)%", percent)
+    return math.ceil(int(parts.group(1)) / 20) * "|"
 
 
 def watch_nodes():
@@ -251,17 +307,16 @@ def watch_nodes():
         "nodes",
         "--watch",
         "--show-kind=true",
-        "--label-columns=topology.kubernetes.io/zone,node.kubernetes.io/instance-type,app.pagerduty.com/repo,app.pagerduty.com/taec-node-group-name",
+        "--label-columns=topology.kubernetes.io/zone,node.kubernetes.io/instance-type,karpenter.sh/capacity-type",
     ].popen()
 
     headers = re.split("\\s{3,}", p.stdout.readline().decode("utf-8").strip())
     node_table.field_names = [
         "NAME",
+        "Pods",
         "CReq",
-        "CLim",
         "CUse",
         "MReq",
-        "MLim",
         "MUse",
     ] + headers[1:]
     sort_column = get_sort_column(table)
@@ -289,14 +344,18 @@ def update_node_output():
             if "fargate" in node_name:
                 continue
 
-            metrics = ["" for _ in range(6)]
+            pods = ""
+            if node_name in node_podcount_cache:
+                pods = node_podcount_cache[node_name]
+
+            metrics = ["" for _ in range(4)]
             if node_name in node_metrics_cache:
                 for index, metric in enumerate(node_metrics_cache[node_name]):
                     metrics[index] = metric
 
             status = node_status_cache[node_name]
 
-            row = [node_name] + metrics + status
+            row = [node_name, pods] + metrics + status
             header_length = len(node_table.field_names)
             while header_length > len(row):
                 row = row + [""]
