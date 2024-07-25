@@ -32,14 +32,15 @@
     (kubectl--update-process-buffer-string command t)
     (bpr-spawn (kubectl--set-options command))))
 
-(defun kubectl--run-process-bg (command on-success)
+(defun kubectl--run-process-bg (command &optional on-success)
   (let* ((bpr-show-progress nil)
-         (bpr-on-success on-success)
+         (bpr-on-success (if on-success on-success (lambda (process))))
          (bpr-open-after-error nil))
     (bpr-spawn (kubectl--set-options command))))
 
 (defun kubectl--run-process-and-pop (command &optional editing)
-  (let* ((bpr-on-completion 'kubectl--pop-process)
+  (let* ((default-directory kubectl--my-directory)
+         (bpr-on-completion 'kubectl--pop-process)
          (bpr-process-mode (if editing 'kubectl-edit-mode 'kubectl-command-mode))
          (bpr-erase-process-buffer t)
          (proc (bpr-spawn (kubectl--set-options command))))

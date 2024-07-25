@@ -39,8 +39,21 @@
 
 (defun kubectl-pod-logs ()
   (interactive)
-  (let ((thing-at-point (car (s-split " " (substring-no-properties (current-line-contents))))))
-    (kubectl--open-shell-with-command (format "kubectl logs --tail=50 -f %s" thing-at-point))))
+  (let ((has-one-container (s-contains? "/1 " (current-line-contents)))
+        (pod-at-point (car (s-split " " (substring-no-properties (current-line-contents))))))
+    (if has-one-container
+        (kubectl--open-shell-with-command (format "kubectl logs --tail=50 -f %s" pod-at-point))
+      (let ((container (completing-read
+                        "choose a container"
+                        (->> (format "kubectl get %s -ojson | jq -r  '.spec.containers[].name'" pod-at-point)
+                             (shell-command-to-string)
+                             (s-trim)
+                             (s-split "\n"))
+                        nil
+                        t)))
+        (kubectl--open-shell-with-command (format "kubectl logs --tail=50 -f %s --container=%s" pod-at-point container)))
+      )
+    ))
 
 (defun kubectl--open-shell-with-command (command)
   (interactive)
@@ -69,8 +82,101 @@
                          kubectl-current-cluster
                          kubectl-current-context
                          kubectl-current-namespace))
+         (default-directory kubectl--my-directory)
          (bpr-process-mode 'kubectl-command-mode))
     (when (y-or-n-p prompt)
       (bpr-spawn (format "kubectl delete %s" resource-at-point)))))
+
+(defun kubectl-unmark-last-applied-configuration-at-point ()
+  (interactive)
+  (let* ((resource-at-point (kubectl-current-line-resource-as-string))
+         (annotation "kubectl.kubernetes.io/last-applied-configuration")
+         (prompt (format "Confirm REMOVE annotation %s %s- (cluster: %s | context: %s | namespace: %s) ?"
+                         resource-at-point
+                         annotation
+                         kubectl-current-cluster
+                         kubectl-current-context
+                         kubectl-current-namespace))
+         (default-directory kubectl--my-directory)
+         (bpr-process-mode 'kubectl-command-mode))
+    (when (y-or-n-p prompt)
+      (message "saving a copy first")
+      (let* ((yaml (shell-command-to-string (format "kubectl get %s --output yaml" resource-at-point)))
+             (name (apply 'format "%s/%s-%s.yaml" (-insert-at 1 (format-time-string "%s" (current-time)) (s-split "/" kubectl-edit--current-resource))))
+             (filename (f-join kubectl-edit--folder name)))
+        (f-mkdir (f-dirname filename))
+        (f-write-text yaml 'utf-8 filename))
+      (bpr-spawn (format "kubectl annotate %s %s-" resource-at-point annotation)))))
+
+(defun kubectl-restart-workload-at-point ()
+  (interactive)
+  (let* ((resource-at-point (kubectl-current-line-resource-as-string))
+         (current-line-resource-kind (car (s-split "/" resource-at-point)))
+         (restart-command (if (s-contains-p "rollout" current-line-resource-kind)
+                              (format "kubectl patch %s -p '{\"spec\":{\"restartAt\":\"%s\"}}' --type merge"
+                                      resource-at-point
+                                      (format-time-string "%Y-%m-%dT%H:%M:%SZ" nil "UTC"))
+                            (format "kubectl rollout restart %s" resource-at-point)))
+         (prompt (format "Confirm restart workload %s (%s) (cluster: %s | context: %s | namespace: %s) ?"
+                         resource-at-point
+                         restart-command
+                         kubectl-current-cluster
+                         kubectl-current-context
+                         kubectl-current-namespace))
+         (default-directory kubectl--my-directory)
+         (bpr-process-mode 'kubectl-command-mode))
+    (when (y-or-n-p prompt)
+      (bpr-spawn restart-command))))
+
+(defun kubectl-cordon-nodes-at-point ()
+  (interactive)
+  (let* ((nodes (kubectl-get-resources-at-point-or-region))
+         (command (format "kubectl cordon %s" (s-join " " nodes)))
+         (prompt (format "Confirm cordon %s nodes (cluster: %s | context: %s | namespace: %s) %s?"
+                         (length nodes)
+                         kubectl-current-cluster
+                         kubectl-current-context
+                         kubectl-current-namespace
+                         command)))
+    (when (y-or-n-p prompt)
+      (bpr-spawn command))
+    ))
+
+(defun kubectl-drain-nodes-at-point ()
+  (interactive)
+  (let* ((nodes (kubectl-get-resources-at-point-or-region))
+         (commands (->> nodes
+                        (--map (format "kubectl drain --ignore-daemonsets --delete-emptydir-data %s" it))))
+         (prompt (format "Confirm drain %s nodes (cluster: %s | context: %s | namespace: %s)? %s"
+                         (length nodes)
+                         kubectl-current-cluster
+                         kubectl-current-context
+                         kubectl-current-namespace
+                         (car commands)
+                         )))
+    (when (y-or-n-p prompt)
+      (--map (kubectl--run-process-bg it) commands))
+    ))
+
+(defun kubectl-run-cronjob-at-point ()
+  (interactive)
+  (let* ((resources (kubectl-get-resources-at-point-or-region))
+         (commands (->> resources
+                        (--map (format "kubectl create job --from=%s %s-trigger-dgempesaw-%s" it (cadr (s-split "/" it)) (floor (float-time))))))
+         (prompt (format "Confirm create job (cluster: %s | context: %s | namespace: %s)? %s"
+                         kubectl-current-cluster
+                         kubectl-current-context
+                         kubectl-current-namespace
+                         (car commands)
+                         )))
+    (when (y-or-n-p prompt)
+      (--map (kubectl--run-process-bg it) commands))))
+
+(defun kubectl-get-resources-at-point-or-region ()
+  (if (region-active-p)
+      (->> (buffer-substring-no-properties (region-beginning) (region-end))
+           (s-split "\n")
+           (-map 'kubectl-line-resource-as-string))
+    `(,(kubectl-current-line-resource-as-string))))
 
 (provide 'kubectl-at-point)

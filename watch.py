@@ -12,6 +12,7 @@ from threading import Lock, Thread
 from plumbum.cmd import kube_capacity, kubectl, sort, uniq
 from prettytable import PLAIN_COLUMNS, PrettyTable
 
+KUBECTL_DIRECTORY = "/Users/dgempesaw/opt/kubectl.el"
 DATA_DIRECTORY = "/Users/dgempesaw/opt/kubectl.el/data"
 pod_metrics_cache = {}
 pod_kubectl_cache = {}
@@ -26,6 +27,7 @@ SORT_COLUMN = sys.argv[3]
 
 
 def main():
+    os.chdir(KUBECTL_DIRECTORY)
     arg = sys.argv[1]
 
     print(sys.argv)
@@ -37,6 +39,7 @@ def main():
     Thread(target=poll_node_metrics).start()
     Thread(target=poll_podcount).start()
     Thread(target=watch_nodes).start()
+    Thread(target=refresh_nodes).start()
 
     for resource in resources:
         Thread(target=watch, args=[resource]).start()
@@ -97,6 +100,7 @@ def watch(resource):
     if not is_pod(resource):
         command += ["--output-watch-events=true"]
 
+    print(command)
     p = kubectl[command].popen()
     if is_pod(resource) and not is_all_namespaces():
         headers = re.split("\\s{3,}", p.stdout.readline().decode("utf-8").strip())
@@ -151,7 +155,7 @@ def watch(resource):
 
             # ignore the first column EVENT
             resource_table.field_names = headers[1:]
-            sort_column = get_sort_column(table)
+            sort_column = get_sort_column(resource_table)
             resource_table.sortby = sort_column
             if sort_column in SORT_FUNCTIONS:
                 resource_table.sort_key = SORT_FUNCTIONS[sort_column]
@@ -258,8 +262,14 @@ def poll_podcount():
             node_podcount_cache[f"node/{node_name}"] = count
 
     update_node_output()
-    time.sleep(60)
+    time.sleep(30)
     poll_podcount()
+
+
+def refresh_nodes():
+    update_node_output()
+    time.sleep(10)
+    refresh_nodes()
 
 
 def poll_node_metrics():
@@ -274,7 +284,7 @@ def poll_node_metrics():
             node_metrics_cache[f"node/{name}"] = metrics
 
     update_node_output()
-    time.sleep(10)
+    time.sleep(30)
     poll_node_metrics()
 
 
@@ -288,12 +298,12 @@ def make_metric_pretty(metric):
 
 def round_cpu(resource):
     parts = re.search(r"(\d+)([a-z]+)", resource)
-    return round(int(parts.group(1)) / 1000, 0)
+    return round(int(parts.group(1)) / 1000, 1)
 
 
 def round_mem(resource):
     parts = re.search(r"(\d+)Mi", resource)
-    return f"{round(int(parts.group(1)) / 1000, 0)}Gi"
+    return f"{round(int(parts.group(1)) / 1000, 1)}Gi"
 
 
 def percent_as_lines(percent):
@@ -319,7 +329,7 @@ def watch_nodes():
         "MReq",
         "MUse",
     ] + headers[1:]
-    sort_column = get_sort_column(table)
+    sort_column = get_sort_column(node_table)
     node_table.sortby = sort_column
     if sort_column in SORT_FUNCTIONS:
         node_table.sort_key = SORT_FUNCTIONS[sort_column]
@@ -332,8 +342,6 @@ def watch_nodes():
 
         if p.poll() != None:
             break
-
-        update_node_output()
 
 
 def update_node_output():
@@ -362,9 +370,10 @@ def update_node_output():
 
             node_table.add_row(row)
 
+            string = node_table.get_string()
             with open(f"{DATA_DIRECTORY}/kcnodes", "w") as f:
                 f.seek(0)
-                f.write(node_table.get_string())
+                f.write(string)
                 f.write("\n")
                 f.truncate()
 

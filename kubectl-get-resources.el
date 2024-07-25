@@ -6,9 +6,24 @@
                       default-directory)))
 
 (defvar kubectl--watch-process nil)
+(defvar kubectl--transient-grep-auto nil)
 (defun kubectl-get-resources ()
   (when (process-live-p kubectl--watch-process)
     (delete-process kubectl--watch-process))
+  (let ((extra-karpenter-resources ",nodeclaims,nodepools,ec2nodeclasses")
+        (namespace (if kubectl-all-namespaces "All Namespaces" kubectl-current-namespace)))
+    (if (and (s-equals-p namespace "karpenter")
+             (not (s-ends-with-p extra-karpenter-resources kubectl-resources-current)))
+        (setq kubectl-resources-current (format "%s%s" kubectl-resources-current extra-karpenter-resources))
+      (when (s-ends-with-p extra-karpenter-resources kubectl-resources-current)
+        (setq kubectl-resources-current (s-chop-suffix extra-karpenter-resources kubectl-resources-current))))
+    (if (s-equals-p namespace "kube-system")
+        (if (not kubectl--transient-grep-needle)
+            (setq kubectl--transient-grep-needle "coredns"
+                  kubectl--transient-grep-auto t))
+      (if kubectl--transient-grep-auto
+          (setq kubectl--transient-grep-auto nil
+                kubectl--transient-grep-needle nil))))
   (let ((resources (if kubectl-all-namespaces kubectl-resources-current-all-ns kubectl-resources-current))
         (namespace (if kubectl-all-namespaces "All Namespaces" kubectl-current-namespace))
         (sort-column (if kubectl-current-sort-column kubectl-current-sort-column "NAME")))
@@ -26,9 +41,15 @@
          (resources (s-split "," (if kubectl-all-namespaces kubectl-resources-current-all-ns kubectl-resources-current)))
          (contents (->> resources
                         (--map (let ((filename (f-expand (f-join data-directory it))))
-                                 (if (f-exists-p filename)
-                                     (f-read-text filename)
-                                   nil)))
+                                 (let ((contents (if (f-exists-p filename)
+                                                    (f-read-text filename)
+                                                  "")))
+                                   (s-replace
+                                    "NAME    "
+                                    (format "NAME %-3d" (- (->> contents (s-split "\n") (length)) 2))
+                                    contents)
+                                   )
+                                 ))
                         (-remove-item "")
                         (s-join "\n"))))
     (when (and (process-live-p kubectl--watch-process)

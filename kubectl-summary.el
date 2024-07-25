@@ -22,7 +22,7 @@
                            `(("resources" ,(if kubectl-all-namespaces
                                                kubectl-resources-current-all-ns
                                              kubectl-resources-current)))
-                           `(("watch" ,(if (process-live-p kubectl--watch-process ) "true" "false")))
+                           `(("grep" ,(if kubectl--transient-grep-needle kubectl--transient-grep-needle "")))
                            )))
     (setq kubectl-available-contexts available-contexts
           kubectl-current-context current-context-name

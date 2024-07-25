@@ -14,7 +14,7 @@
                                                 (cadr it)))))
                              context)))
       (insert "\n\n")
-      (when (and (not (eq kubectl--merged-nodes-capacity ""))
+      (when (and (not (eq (s-trim (s-replace "\n" "" kubectl--merged-nodes-capacity)) ""))
                  kubectl--view-kube-capacity)
         (insert kubectl--merged-nodes-capacity)
         (insert "\n\n"))
@@ -46,5 +46,7 @@
   (interactive)
   (pop-to-buffer (kubectl--get-process-buffer))
   (goto-char (point-max)))
+
+
 
 (provide 'kubectl-draw)

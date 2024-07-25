@@ -24,4 +24,7 @@
       (cd cwd)
       (kubectl-mode))))
 
+(global-set-key (kbd "M-s-k") (lambda () (interactive (kubectl 4))))
+
+
 (provide 'kubectl)

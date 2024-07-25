@@ -40,19 +40,17 @@
   (define-key kubectl-mode-map (kbd "t") 'kubectl-toggle-capacity)
   (define-key kubectl-mode-map (kbd "|") 'kubectl-transient-grep)
   (define-key kubectl-mode-map (kbd "A") 'kubectl-transient-choose-resource-all-ns)
-  (define-key kubectl-mode-map (kbd "R") 'kubectl-transient-choose-resource)
   (define-key kubectl-mode-map (kbd "G") 'kubectl-toggle-autorefresh)
   (define-key kubectl-mode-map (kbd "N") 'kubectl-choose-namespace)
   (define-key kubectl-mode-map (kbd "C") 'kubectl-transient-choose-context)
   (define-key kubectl-mode-map (kbd "s") 'kubectl-sort-by)
 
-
   (define-key kubectl-mode-map (kbd "w") 'kubectl-copy-resource-at-point)
   (define-key kubectl-mode-map (kbd "0 w") 'kubectl-copy-line-at-point)
   (define-key kubectl-mode-map (kbd "e") 'kubectl-edit-resource-at-point)
-  (define-key kubectl-mode-map (kbd "k") 'kubectl-delete-resource-at-point)
-  (define-key kubectl-mode-map (kbd "o") 'kubectl-get-yaml-at-point)
   (define-key kubectl-mode-map (kbd "<return>") 'kubectl-describe-resource-at-point)
+
+  (define-key kubectl-mode-map (kbd "o") 'kubectl-transient-action-at-point)
 
   (define-key kubectl-mode-map (kbd "f") 'kubectl-port-forward)
   (define-key kubectl-mode-map (kbd "x") 'kubectl-shell-at-point)
@@ -68,6 +66,9 @@
   (define-key kubectl-mode-map (kbd "g") 'kubectl-init)
   (define-key kubectl-mode-map (kbd "$") 'kubectl-show-log-buffer)
   (define-key kubectl-mode-map (kbd ":") 'kubectl-run-custom-command)
+  (define-key kubectl-mode-map (kbd "b") (lambda () (interactive)
+                                           (ibuffer)
+                                           (ibuffer-filter-by-process)))
 
   (define-key kubectl-mode-map (kbd "?") 'kubectl-transient-help)
   (define-key kubectl-mode-map (kbd "h") 'kubectl-transient-help)
@@ -83,8 +84,10 @@
       (kubectl-get-resources))))
 
 (defun kubectl--get-available-contexts ()
-  (let ((contexts-lookup "~/opt/pd-kubectx-cli/pd_kubectx_cli/clusters.json"))
-    (s-split "\n" (s-chomp (shell-command-to-string (format "jq -r .clusters[].name < %s" contexts-lookup))))))
+  (->> "~/.pd-kubectx/clusters"
+       (directory-files)
+       (--filter (s-contains-p ".json" it))
+       (--map (s-chop-suffix ".json" it))))
 
 (defun kubectl-get-namespaces ()
   (kubectl--cache-namespaces (--map (s-chop-prefix "> " it) (s-split "\n" (shell-command-to-string "pk ns --list")))))
@@ -102,11 +105,14 @@
         (setq kubectl-api-abbreviations (--map (cadr it) (--filter (eq (length it) 5) lines)))
         (setq kubectl-api-resource-names (--map (car it) lines))))))
 
-(defun kubectl-current-line-resource-as-string ()
-  (let* ((parts (s-split " +" (substring-no-properties (current-line-contents))))
+(defun kubectl-line-resource-as-string (line)
+  (let* ((parts (s-split " +" line))
          (resource (if kubectl-all-namespaces (cadr parts) (car parts)))
          (namespace-flag (if kubectl-all-namespaces (format "--namespace %s" (car parts)) "")))
     (format "%s %s" namespace-flag resource)))
+
+(defun kubectl-current-line-resource-as-string ()
+  (s-trim (kubectl-line-resource-as-string (substring-no-properties (current-line-contents)))))
 
 (defun kubectl-describe-resource-at-point ()
   (interactive)
@@ -128,7 +134,8 @@
                       nil)))
   (when (not (s-blank-p ns))
     (shell-command-to-string (format "pk ns %s" ns))
-    (setq kubectl-current-display ""
+    (setq kubectl--transient-grep-needle nil
+          kubectl-current-display ""
           kubectl-all-namespaces (s-blank-p ns)
           kubectl-current-namespace ns)
     (kubectl-get-resources)))
