@@ -35,7 +35,8 @@
 (defun kubectl--run-process-bg (command &optional on-success)
   (let* ((bpr-show-progress nil)
          (bpr-on-success (if on-success on-success (lambda (process))))
-         (bpr-open-after-error nil))
+         (bpr-open-after-error nil)
+         (default-directory kubectl--my-directory))
     (bpr-spawn (kubectl--set-options command))))
 
 (defun kubectl--run-process-and-pop (command &optional editing)

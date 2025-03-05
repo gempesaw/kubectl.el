@@ -10,13 +10,11 @@
 
 (defun kubectl--refresh-kcnodes ()
   (when (process-live-p kubectl--watch-process)
-    (let* ((filename (f-expand (f-join kubectl--my-directory "data" "kcnodes")))
-           (contents (if (f-exists-p filename)
-                         (f-read-text filename)
-                       ""))
+    (let* ((contents (with-current-buffer (get-buffer-create " kubectl--resource-buffer-kcnodes")
+                       (buffer-substring-no-properties (point-min) (point-max))))
            (count (- (->> contents
-                           (s-split "\n")
-                           (length))
+                          (s-split "\n")
+                          (length))
                      2)))
       (when (not (and (s-equals-p contents kubectl--merged-nodes-capacity)
                       (s-equals-p contents "")))

@@ -1,3 +1,8 @@
+(require 'epc)
+
+(require 'server)
+(server-start)
+
 (defvar kubectl--my-directory
   (expand-file-name (if load-file-name
                         ;; File is being loaded.
@@ -7,56 +12,46 @@
 
 (defvar kubectl--watch-process nil)
 (defvar kubectl--transient-grep-auto nil)
-(defun kubectl-get-resources ()
+(defvar kubectl--transient-grep-needle "-")
+(defun kubectl-get-resources (&optional grep-needle-arg)
   (when (process-live-p kubectl--watch-process)
     (delete-process kubectl--watch-process))
-  (let ((extra-karpenter-resources ",nodeclaims,nodepools,ec2nodeclasses")
-        (namespace (if kubectl-all-namespaces "All Namespaces" kubectl-current-namespace)))
-    (if (and (s-equals-p namespace "karpenter")
-             (not (s-ends-with-p extra-karpenter-resources kubectl-resources-current)))
-        (setq kubectl-resources-current (format "%s%s" kubectl-resources-current extra-karpenter-resources))
-      (when (s-ends-with-p extra-karpenter-resources kubectl-resources-current)
-        (setq kubectl-resources-current (s-chop-suffix extra-karpenter-resources kubectl-resources-current))))
-    (if (s-equals-p namespace "kube-system")
-        (if (not kubectl--transient-grep-needle)
-            (setq kubectl--transient-grep-needle "coredns"
-                  kubectl--transient-grep-auto t))
-      (if kubectl--transient-grep-auto
-          (setq kubectl--transient-grep-auto nil
-                kubectl--transient-grep-needle nil))))
   (let ((resources (if kubectl-all-namespaces kubectl-resources-current-all-ns kubectl-resources-current))
         (namespace (if kubectl-all-namespaces "All Namespaces" kubectl-current-namespace))
-        (sort-column (if kubectl-current-sort-column kubectl-current-sort-column "NAME")))
+        (sort-column (if kubectl-current-sort-column kubectl-current-sort-column "NAME"))
+        (grep-needle (if grep-needle-arg
+                         grep-needle-arg
+                       (if kubectl--transient-grep-needle
+                           kubectl--transient-grep-needle
+                         "-"))))
     (setq kubectl--watch-process
-          (start-process
-           "kubectl-watch"
-           kubectl-process-buffer-name
-           "python" (f-expand (f-join kubectl--my-directory "watch.py")) resources namespace sort-column))
+          (with-environment-variables (("EMACS_SERVER_SOCKET_DIR" server-socket-dir))
+            (start-process
+             "kubectl-watch"
+             kubectl-process-buffer-name
+             "python" (f-expand (f-join kubectl--my-directory "watch.py")) resources namespace sort-column grep-needle))
+          kubectl--transient-grep-needle grep-needle)
     (kubectl--refresh-current-display)
     (kubectl--refresh-kcnodes)
     (kubectl--get-resources-cancel)))
 
+(defun kubectl--write-buffer-contents (buf contents)
+  (with-current-buffer (get-buffer-create buf t)
+    (erase-buffer)
+    (insert contents)))
+
+(setq kubectl--data-directory "/private/var/tmp/kubectl-data")
 (defun kubectl--refresh-current-display ()
-  (let* ((data-directory (f-expand (f-join kubectl--my-directory "data")))
-         (resources (s-split "," (if kubectl-all-namespaces kubectl-resources-current-all-ns kubectl-resources-current)))
+  (let* ((resources (s-split "," (if kubectl-all-namespaces kubectl-resources-current-all-ns kubectl-resources-current)))
          (contents (->> resources
-                        (--map (let ((filename (f-expand (f-join data-directory it))))
-                                 (let ((contents (if (f-exists-p filename)
-                                                    (f-read-text filename)
-                                                  "")))
-                                   (s-replace
-                                    "NAME    "
-                                    (format "NAME %-3d" (- (->> contents (s-split "\n") (length)) 2))
-                                    contents)
-                                   )
-                                 ))
-                        (-remove-item "")
-                        (s-join "\n"))))
+                        (--map (let ((buf-name (format " kubectl--resource-buffer-%s" it)))
+                                 (with-current-buffer (get-buffer-create buf-name)
+                                   (buffer-substring-no-properties (point-min) (point-max)))))
+                        (s-join "\n\n"))))
     (when (and (process-live-p kubectl--watch-process)
-               (not (s-equals-p contents kubectl-current-display))
-               (not (s-equals-p (s-trim contents) "")))
+               (not (s-equals-p contents kubectl-current-display)))
       (kubectl-redraw contents))
-    (run-with-timer 2 nil 'kubectl--refresh-current-display)))
+    (run-with-timer 5 nil 'kubectl--refresh-current-display)))
 
 (defun kubectl--get-resources-cancel ()
   "cancel the watch cuz the window is unfocused"
@@ -80,5 +75,18 @@
                       nil)))
   (setq kubectl-current-sort-column sort-column)
   (kubectl-get-resources))
+
+(setq kubectl--transient-grep-needle-history '())
+(defun kubectl-get-resources-grep ()
+  (interactive)
+  (let* ((workload-kinds-regex (s-join "\\|" '("deployment" "statefulset" "daemonset")))
+         (workloads (->> kubectl-current-display
+                         (s-split "\n")
+                         (--filter (s-matches-p workload-kinds-regex it))
+                         (--map (nth 1 (s-split "[/ ]" it t)))))
+         (history (-uniq (-concat kubectl--transient-grep-needle-history workloads)))
+         (grep-needle (completing-read "needle to search for: " history nil nil)))
+    (add-to-list 'kubectl--transient-grep-needle-history grep-needle)
+    (kubectl-get-resources grep-needle)))
 
 (provide 'kubectl-get-resources)

@@ -13,24 +13,12 @@
                                                   "All Namespaces"
                                                 (cadr it)))))
                              context)))
-      (insert "\n\n")
       (when (and (not (eq (s-trim (s-replace "\n" "" kubectl--merged-nodes-capacity)) ""))
                  kubectl--view-kube-capacity)
-        (insert kubectl--merged-nodes-capacity)
-        (insert "\n\n"))
+        (insert (format "\n\n%s" kubectl--merged-nodes-capacity)))
 
       (when (not (eq kubectl-current-display ""))
-        (if kubectl--transient-grep-needle
-            (insert
-             (->> kubectl-current-display
-                  (s-split "\n")
-                  (--filter (or (s-matches-p "NAME" it)
-                                (if kubectl--transient-grep-invert
-                                    (not (s-matches-p (s-replace "|" "\\|" kubectl--transient-grep-needle) it))
-                                  (s-matches-p kubectl--transient-grep-needle it))
-                                (s-equals-p "" it)))
-                  (s-join "\n")))
-          (insert kubectl-current-display))))
+        (insert (s-replace-regexp "\n\\{2,\\}" "\n\n" (format "\n\n%s" kubectl-current-display)))))
 
     (with-current-buffer (get-buffer-create kubectl-main-buffer-name)
       (replace-buffer-contents kubectl-replace-buffer))))

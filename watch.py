@@ -4,16 +4,18 @@ import json
 import math
 import os
 import re
-import shutil
 import sys
 import time
+from pathlib import Path
 from threading import Lock, Thread
 
+from emacs import EmacsClient
 from plumbum.cmd import kube_capacity, kubectl, sort, uniq
 from prettytable import PLAIN_COLUMNS, PrettyTable
 
-KUBECTL_DIRECTORY = "/Users/dgempesaw/opt/kubectl.el"
-DATA_DIRECTORY = "/Users/dgempesaw/opt/kubectl.el/data"
+EMACS_SERVER_SOCKET_DIR = Path(os.environ.get("EMACS_SERVER_SOCKET_DIR"))
+KUBECTL_DIRECTORY = "/Users/gempesaw/opt/kubectl.el"
+DATA_DIRECTORY = "/private/var/tmp/kubectl-data"
 pod_metrics_cache = {}
 pod_kubectl_cache = {}
 table = PrettyTable()
@@ -24,6 +26,17 @@ update_pod_lock = Lock()
 
 
 SORT_COLUMN = sys.argv[3]
+REVERSE_SORT = False if SORT_COLUMN == "AGE" else True
+GREP_NEEDLE = sys.argv[4]
+IS_GREP = GREP_NEEDLE != "-"
+
+
+def make_emacs_client():
+    server_socket = next(EMACS_SERVER_SOCKET_DIR.glob("*"))
+    return EmacsClient(server=server_socket)
+
+
+emacs = make_emacs_client()
 
 
 def main():
@@ -32,11 +45,10 @@ def main():
 
     print(sys.argv)
     print(DATA_DIRECTORY)
-    shutil.rmtree(DATA_DIRECTORY)
-    os.mkdir(DATA_DIRECTORY)
+    Path(DATA_DIRECTORY).mkdir(parents=True, exist_ok=True)
     resources = arg.split(",")
 
-    Thread(target=poll_node_metrics).start()
+    # Thread(target=poll_node_metrics).start()
     Thread(target=poll_podcount).start()
     Thread(target=watch_nodes).start()
     Thread(target=refresh_nodes).start()
@@ -44,8 +56,8 @@ def main():
     for resource in resources:
         Thread(target=watch, args=[resource]).start()
 
-        if is_pod(resource):
-            Thread(target=poll_pod_metrics, args=[resource]).start()
+        # if is_pod(resource):
+        #     Thread(target=poll_pod_metrics, args=[resource]).start()
 
 
 def is_pod(resource):
@@ -57,11 +69,23 @@ def is_all_namespaces():
     return namespace == "All Namespaces"
 
 
+def write_output_to_emacs_buffer(resource, contents):
+    try:
+        buffer = f" kubectl--resource-buffer-{resource}"
+        emacs.eval(
+            f'(kubectl--write-buffer-contents "{buffer}" "{contents.replace('"', '\\"')}")'
+        )
+    except:
+        print("error writing to emacs")
+
+
 def update_pod_output(resource):
     with update_pod_lock:
         table.clear_rows()
 
-        for pod_name in pod_kubectl_cache.keys():
+        keys = pod_kubectl_cache.keys()
+        total = len(keys)
+        for pod_name in keys:
             line_metrics = ["" for _ in range(6)]
             if pod_name in pod_metrics_cache:
                 line_metrics = [
@@ -73,13 +97,18 @@ def update_pod_output(resource):
                     pod_metrics_cache[pod_name]["memory"]["utilization"],
                 ]
 
-            table.add_row([pod_name] + line_metrics + pod_kubectl_cache[pod_name][1:])
+            data = [pod_name] + line_metrics + pod_kubectl_cache[pod_name][1:]
+            if total > 20 and IS_GREP:
+                if GREP_NEEDLE in " ".join(data):
+                    table.add_row(data)
+            else:
+                table.add_row(data)
 
-        with open(f"{DATA_DIRECTORY}/{resource}", "w") as f:
-            f.seek(0)
-            f.write(table.get_string())
-            f.write("\n")
-            f.truncate()
+        contents = table.get_string(start=0, end=20).replace(
+            f"NAME {len(str(total)) * " "}", f"NAME {total}"
+        )
+
+        write_output_to_emacs_buffer(resource, contents)
 
 
 def get_sort_column(table, default_sort_column="NAME"):
@@ -97,10 +126,13 @@ def watch(resource):
     else:
         command += ["--watch"]
 
-    if not is_pod(resource):
-        command += ["--output-watch-events=true"]
+    if is_pod(resource):
+        command += ["--field-selector=status.phase!=Completed"]
+    else:
+        if "--watch" in command:
+            command += ["--output-watch-events=true"]
 
-    print(command)
+    print(" ".join(command))
     p = kubectl[command].popen()
     if is_pod(resource) and not is_all_namespaces():
         headers = re.split("\\s{3,}", p.stdout.readline().decode("utf-8").strip())
@@ -121,12 +153,10 @@ def watch(resource):
         while True:
             line = re.split("\\s{3,}", p.stdout.readline().decode("utf-8").strip())
             name = line[0]
-
             pod_kubectl_cache[name] = line
 
             ready = line[1]
             status = line[2]
-
             if ready[0] == "0" and status == "Terminating":
                 del pod_kubectl_cache[name]
 
@@ -141,60 +171,79 @@ def watch(resource):
         resource_table.align = "l"
         resource_table.right_padding_width = 2
 
-        with open(f"{DATA_DIRECTORY}/{resource}", "w") as f:
-            while True:
-                line = p.stdout.readline().decode("utf-8").strip()
-                if line == "":
-                    time.sleep(1)
-                    continue
+        while True:
+            line = p.stdout.readline().decode("utf-8").strip()
+            if line == "":
+                time.sleep(1)
+                continue
+            else:
+                break
+
+        headers = re.split("\\s{3,}", line)
+        header_start_positions = re.finditer("\\s{3}[A-Z]", line)
+        headers_columns = len(headers)
+
+        # ignore the first column EVENT
+        resource_table.field_names = headers[1:]
+        sort_column = get_sort_column(resource_table)
+        resource_table.sortby = sort_column
+        if sort_column in SORT_FUNCTIONS:
+            resource_table.sort_key = SORT_FUNCTIONS[sort_column]
+
+        while True:
+            line_text = p.stdout.readline().decode("utf-8").strip()
+            for start_position_span in header_start_positions:
+                column = start_position_span.span(0)[0] + 3
+                if line_text[column] == " ":
+                    line_text = line_text[:column] + "." + line_text[(column + 1) :]
+
+            [event, *line] = re.split("\\s{3,}", line_text)
+
+            if is_all_namespaces():
+                # event, namespace, name, ...
+                name = line[1]
+            else:
+                # event, name
+                name = line[0]
+
+            line_columns = len(line)
+            # if line_columns < headers_columns:
+            #     if "nodeclaim" in resource.lower() and len(line) > 4:
+            #         # sometimes the NODE column is empty and it throws off the
+            #         # rest of the columns, particularly for sorting nodeclaims
+            #         # by age
+            #         if "ip-" not in line[4] and "i-" not in line[4]:
+            #             line = line[0:4] + [""] + line[4:]
+            #             line_columns = len(line)
+            #     missing = headers_columns - line_columns - 1
+            #     buffer = ["" for _ in range(missing)]
+            #     line = line[0:-1] + buffer + [line[-1]]
+
+            if event in ["ADDED", "MODIFIED"]:
+                cache[name] = line
+
+            if event == "DELETED":
+                del cache[name]
+
+            resource_table.clear_rows()
+
+            total = len(cache.keys())
+            for name in cache.keys():
+                if total > 20 and IS_GREP:
+                    data = [name] + cache[name][1:]
+                    if GREP_NEEDLE in " ".join(data):
+                        resource_table.add_row(data)
                 else:
-                    break
-
-            headers = re.split("\\s{3,}", line)
-            headers_columns = len(headers)
-
-            # ignore the first column EVENT
-            resource_table.field_names = headers[1:]
-            sort_column = get_sort_column(resource_table)
-            resource_table.sortby = sort_column
-            if sort_column in SORT_FUNCTIONS:
-                resource_table.sort_key = SORT_FUNCTIONS[sort_column]
-
-            while True:
-                [event, *line] = re.split(
-                    "\\s{3,}", p.stdout.readline().decode("utf-8").strip()
-                )
-                if is_all_namespaces():
-                    # event, namespace, name, ...
-                    name = line[1]
-                else:
-                    # event, name
-                    name = line[0]
-
-                line_columns = len(line)
-                if line_columns < headers_columns:
-                    missing = headers_columns - line_columns - 1
-                    buffer = ["" for _ in range(missing)]
-                    line = line[0:-1] + buffer + [line[-1]]
-
-                if event in ["ADDED", "MODIFIED"]:
-                    cache[name] = line
-
-                if event == "DELETED":
-                    del cache[name]
-
-                resource_table.clear_rows()
-
-                for name in cache.keys():
                     resource_table.add_row([name] + cache[name][1:])
 
-                f.seek(0)
-                f.write(resource_table.get_string())
-                f.write("\n")
-                f.truncate()
+            contents = resource_table.get_string(
+                start=0, end=20, reversesort=REVERSE_SORT
+            ).replace(f"NAME {len(str(total)) * " "}", f"NAME {total}")
 
-                if p.poll() != None:
-                    break
+            write_output_to_emacs_buffer(resource, contents)
+
+            if p.poll() != None:
+                break
 
 
 def poll_pod_metrics(resource):
@@ -205,30 +254,34 @@ def poll_pod_metrics(resource):
     metrics = json.loads(
         kube_capacity[
             f"--namespace {namespace} --util --pods --output json".split(" ")
+            # f"--namespace {namespace} --pods --output json".split(" ")
         ]()
     )
 
     for node in metrics["nodes"]:
         if "pods" in node:
             for pod in node["pods"]:
+                pod["cpu"]["utilization"] = pod["cpu"].get("utilization", "0m")
+                pod["memory"]["utilization"] = pod["memory"].get("utilization", "0Mi")
                 cpu_request = int(pod["cpu"]["requests"].rstrip("m"))
                 cpu_util = int(pod["cpu"]["utilization"].rstrip("m"))
 
                 memory_request = int(pod["memory"]["requests"].rstrip("Mi"))
                 memory_util = int(pod["memory"]["utilization"].rstrip("Mi"))
+
                 pod_metrics_cache[f"pod/{pod['name']}"] = {
                     "cpu": {
                         "requests": pod["cpu"]["requests"],
                         "limits": pod["cpu"]["limits"],
-                        "utilization": f"{pod['cpu']['utilization']} ({math.floor(cpu_util / cpu_request * 100)}%)"
-                        if cpu_request > 0
+                        "utilization": f"{percent_as_lines(f"{math.floor(cpu_util / cpu_request * 100)}%")} {pod['cpu']['utilization']}"
+                        if cpu_request > 0 and cpu_util > 0
                         else "",
                     },
                     "memory": {
                         "requests": pod["memory"]["requests"],
                         "limits": pod["memory"]["limits"],
-                        "utilization": f"{pod['memory']['utilization']} ({math.floor(memory_util / memory_request * 100)}%)"
-                        if memory_request > 0
+                        "utilization": f"{percent_as_lines(f"({math.floor(memory_util / memory_request * 100)}%)")} {pod['memory']['utilization']}"
+                        if memory_request > 0 and memory_util > 0
                         else "",
                     },
                 }
@@ -250,7 +303,11 @@ update_node_lock = Lock()
 
 def poll_podcount():
     podcount = (
-        kubectl["get pods -A -o custom-columns=node:.spec.nodeName".split(" ")]
+        kubectl[
+            "get pods -A --field-selector=status.phase==Running -o custom-columns=node:.spec.nodeName".split(
+                " "
+            )
+        ]
         | sort
         | uniq["-c"]
         | sort["-n"]
@@ -262,13 +319,13 @@ def poll_podcount():
             node_podcount_cache[f"node/{node_name}"] = count
 
     update_node_output()
-    time.sleep(30)
+    time.sleep(15)
     poll_podcount()
 
 
 def refresh_nodes():
     update_node_output()
-    time.sleep(10)
+    time.sleep(15)
     refresh_nodes()
 
 
@@ -284,7 +341,7 @@ def poll_node_metrics():
             node_metrics_cache[f"node/{name}"] = metrics
 
     update_node_output()
-    time.sleep(30)
+    time.sleep(60)
     poll_node_metrics()
 
 
@@ -308,7 +365,10 @@ def round_mem(resource):
 
 def percent_as_lines(percent):
     parts = re.search(r"(\d+)%", percent)
-    return math.ceil(int(parts.group(1)) / 20) * "|"
+    util = int(parts.group(1))
+    if util == 0:
+        util = 1
+    return math.ceil(util / 20) * "|"
 
 
 def watch_nodes():
@@ -317,7 +377,7 @@ def watch_nodes():
         "nodes",
         "--watch",
         "--show-kind=true",
-        "--label-columns=topology.kubernetes.io/zone,node.kubernetes.io/instance-type,karpenter.sh/capacity-type",
+        "--label-columns=topology.kubernetes.io/zone,node.kubernetes.io/instance-type,karpenter.sh/nodepool,karpenter.sh/capacity-type",
     ].popen()
 
     headers = re.split("\\s{3,}", p.stdout.readline().decode("utf-8").strip())
@@ -338,7 +398,13 @@ def watch_nodes():
         [name, *status] = re.split(
             "\\s{3,}", p.stdout.readline().decode("utf-8").strip()
         )
-        node_status_cache[name] = status
+
+        namespace = sys.argv[2]
+        if namespace == "buildbarn":
+            if "buildbarn" in " ".join(status):
+                node_status_cache[name] = status
+        else:
+            node_status_cache[name] = status
 
         if p.poll() != None:
             break
@@ -348,6 +414,7 @@ def update_node_output():
     with update_node_lock:
         node_table.clear_rows()
 
+        total = len(node_status_cache.keys())
         for node_name in node_status_cache.keys():
             if "fargate" in node_name:
                 continue
@@ -368,14 +435,14 @@ def update_node_output():
             while header_length > len(row):
                 row = row + [""]
 
-            node_table.add_row(row)
+            if total > 20 and IS_GREP and GREP_NEEDLE != "karpenter":
+                if GREP_NEEDLE in " ".join(row):
+                    node_table.add_row(row)
+            else:
+                node_table.add_row(row)
 
-            string = node_table.get_string()
-            with open(f"{DATA_DIRECTORY}/kcnodes", "w") as f:
-                f.seek(0)
-                f.write(string)
-                f.write("\n")
-                f.truncate()
+        contents = node_table.get_string()
+        write_output_to_emacs_buffer("kcnodes", contents)
 
 
 def sort_age(vals):
@@ -411,6 +478,5 @@ SORT_FUNCTIONS = {
     "MLim": sort_with_percent,
     "MUse": sort_with_percent,
 }
-
 
 main()

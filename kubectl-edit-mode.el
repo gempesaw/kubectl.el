@@ -12,6 +12,14 @@
   (define-key kubectl-edit-mode-map (kbd "M-s") 'kubectl-edit-chide)
   (define-key kubectl-edit-mode-map (kbd "C-c C-k") 'kubectl-edit-cancel))
 
+(defun kubectl-pop-to-create-resource-buffer ()
+  (interactive)
+  (let* ((name (format "manually-created/%s.yaml" (format-time-string "%s" (current-time))))
+         (filename (f-join kubectl-edit--folder name)))
+    (f-mkdir-full-path (f-dirname filename))
+    (find-file-other-window filename)
+    (yank)
+    (kubectl-edit-mode)))
 
 
 (defun kubectl-edit-resource-at-point ()
@@ -20,7 +28,7 @@
   (let* ((yaml (shell-command-to-string (format "kubectl get %s --output yaml" (kubectl-current-line-resource-as-string))))
          (name (apply 'format "%s/%s-%s.yaml" (-insert-at 1 (format-time-string "%s" (current-time)) (s-split "/" kubectl-edit--current-resource))))
          (filename (f-join kubectl-edit--folder name)))
-    (f-mkdir (f-dirname filename))
+    (f-mkdir-full-path (f-dirname filename))
     (f-write-text yaml 'utf-8 filename)
     (find-file-other-window filename)
     (kubectl-edit-mode)))

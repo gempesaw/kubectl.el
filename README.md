@@ -25,7 +25,8 @@ bunch of shell commands. so you must have some binaries installed. here's how
 you could do it with homebrew.
 
 ```
-brew install yq kubectl aws-okta robscott/tap/kube-capacity
+brew install yq kubectl robscott/tap/kube-capacity
+pip install plumbum prettytable epc
 ```
 
 another uh, it depends on some Emacs packages too. I forget how to make the

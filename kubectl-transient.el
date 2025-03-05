@@ -1,3 +1,5 @@
+;; -*- lexical-binding: t; -*-
+
 (require 'transient)
 
 (defvar kubectl-previous-namespace "")
@@ -20,21 +22,28 @@
    [("l" "view logs" kubectl-pod-logs)]]
   ["utility"
    [("g" "refresh" kubectl-init)]
-   [("G" "toggle auto refresh" kubectl-toggle-autorefresh)]
    [("$" "show log buffer" kubectl-show-log-buffer)]
    [(":" "run custom command" kubectl-run-custom-command)]])
 
 (transient-define-prefix kubectl-transient-action-at-point ()
   "do something to the resource at point"
   ["all"
-   ("k" "delete resource" kubectl-delete-resource-at-point)
-   ("u" "remove annotation: remove last-applied-configuration annotation" kubectl-unmark-last-applied-configuration-at-point)]
+   ("K K" "delete resource" kubectl-delete-resource-at-point)
+   ("K F F" "delete resource" kubectl-force-delete-resource-at-point)
+   ("K f" "remove finalizers:" kubectl-remove-finalizers)
+   ("u" "remove annotation: remove last-applied-configuration annotation" kubectl-unmark-last-applied-configuration-at-point)
+   ("p" "pop to create buffer" kubectl-pop-to-create-resource-buffer)]
 
   ["workloads"
+   ("s" "scale workload" kubectl-scale-workload-at-point)
    ("r" "restart workload" kubectl-restart-workload-at-point)
-   ("j" "create job from cronjob" kubectl-run-cronjob-at-point)]
+   ("j" "create job from cronjob" kubectl-run-cronjob-at-point)
+   ("g" "open in grafana" kubectl-open-grafana-workload-at-point)
+   ("G" "open in grafana (all clusters)" kubectl-open-grafana-workload-at-point-all-clusters)
+   ]
 
   ["nodes"
+   ("n" "view node on line" kubectl-view-node-on-line)
    ("c" "cordon nodes" kubectl-cordon-nodes-at-point)
    ("d" "drain nodes" kubectl-drain-nodes-at-point)]
   )
@@ -56,61 +65,16 @@
     ("a" (lambda () (format "all (%s)" kubectl-resources-default)) kubectl-reset-resources)
     ("b" "rBac (roles,rolebindings)" kubectl-set-resources-rbac)
     ("B" "rBac (clusterroles,clusterrolebindings)" kubectl-set-resources-cluster-rbac)
-    ("C" "crossplane" kubectl-set-resources-crossplane)
+    ("k" "karpenter" kubectl-set-resources-karpenter)
+    ("K" "karpenter CRDs" kubectl-set-resources-karpenter-crds)
     ("j" "jobs (cronjobs,jobs,pods)" kubectl-set-resources-jobs)
     ("e" "externalsecrets (clusterexternalsecrets,clustersecretstores,externalsecrets,secretstores,secrets)" kubectl-set-resources-secrets)
+    ("v" "volumes (pvc,pv,volumeattachments)" kubectl-set-resources-volumes)
 
-    ("p" "all no pods (ro,ds,sts,deploy,svc,ing,cm)" kubectl-set-resources-all-no-pods)
+    ("p" "all no pods (ds,sts,deploy,svc,ing,cm)" kubectl-set-resources-all-no-pods)
     ]
    ]
   )
-
-(progn
-  (defvar kubectl--transient-grep-needle nil)
-  (defvar kubectl--transient-grep-invert nil)
-
-  (transient-define-argument kubectl--transient-grep-value ()
-    :description "what grep value to filter with"
-    :class 'transient-option
-    :key "g"
-    :argument ""
-    :init-value (lambda (ob) (setf (slot-value ob 'value) kubectl--transient-grep-needle)))
-
-  (transient-define-prefix kubectl-transient-grep ()
-    "Filter the displayed resources"
-    ["Options"
-     (kubectl--transient-grep-value)
-     ("-v" "invert match" "--invert-match"
-      :init-value (lambda (ob) (setf (slot-value ob 'value) kubectl--transient-grep-invert)))
-     ]
-    ["Actions"
-     [("SPC" "Apply filter"
-       (lambda (&optional args)
-         (interactive (list (transient-args transient-current-command)))
-         (let ((needle (car args))
-               (invert (transient-arg-value "--invert-match" args)))
-           (if invert
-               (setq kubectl--transient-grep-invert "--invert-match")
-             (setq kubectl--transient-grep-invert nil))
-
-           (when (s-equals-p needle "--invert-match")
-             (setq needle nil))
-           (setq kubectl--transient-grep-needle needle)
-           (kubectl-print-buffer))))
-      ("<return>" "Apply filter"
-       (lambda (&optional args)
-         (interactive (list (transient-args transient-current-command)))
-         (let ((needle (car args))
-               (invert (transient-arg-value "--invert-match" args)))
-           (if invert
-               (setq kubectl--transient-grep-invert "--invert-match")
-             (setq kubectl--transient-grep-invert nil))
-
-           (when (s-equals-p needle "--invert-match")
-             (setq needle nil))
-           (setq kubectl--transient-grep-needle needle)
-           (kubectl-print-buffer))))]]))
-
 
 (transient-define-prefix kubectl-transient-choose-resource-all-ns ()
   "Choose resources to query for in all namespaces"
@@ -147,22 +111,20 @@
                   (setf (slot-value ob 'value) kubectl-resources-current))
     :reader (lambda (prompt initial-input history)
               (s-join "," (completing-read-multiple prompt kubectl-api-resource-names nil nil initial-input history))))
-   ("a" "AWS Role" "a="
+   ("a" "AWS Profile" "a="
     :always-read t
+    ;; :multi-value t
     :init-value (lambda (ob)
                   (setf (slot-value ob 'value) kubectl-current-role))
     :reader (lambda (prompt initial-input history)
-              (completing-read prompt (->> (shell-command-to-string "/Users/dgempesaw/.asdf/shims/pk role --list")
-                                           (funcall (lambda (it) (s-split "\n" it t)))
-                                           (--filter (not (s-matches-p "^>" it)))
-                                           (s-join "\n")
-                                           (json-parse-string)
-                                           (ht-map (lambda (key value)
-                                                     (mapcar (lambda (rn) (format "%s" rn)) value)))
-                                           (-flatten)
-                                           (-distinct))
-                               nil nil initial-input history))
-    )
+              (completing-read prompt
+                               (--> "aws configure list-profiles"
+                                    (shell-command-to-string it)
+                                    (s-split "\n" it t))
+                               nil
+                               nil
+                               initial-input
+                               history)))
    ]
   ["Connect"
    [("SPC" "Connect"
@@ -171,24 +133,67 @@
        (let* ((context (transient-arg-value "c=" args))
               (namespace (transient-arg-value "ns=" args))
               (resources (transient-arg-value "r=" args))
-              (aws-role (transient-arg-value "a=" args))
-              (aws-role-command (if aws-role (format "pk role %s" aws-role) "pk role --clear")))
-         (dg-shell-exec (format "%s && pk connect %s %s" aws-role-command context namespace) #'dg-shell-connect-sentinel)
+              (aws-role (transient-arg-value "a=" args)))
+         (dg-modular-ensure-aws-profile-login aws-role)
          (setq kubectl-current-context context
                kubectl-current-namespace namespace
                kubectl-resources-current resources
-               kubectl-current-role aws-role)
-         ;; (kubectl-init)
+               kubectl-current-role aws-role
+               )
+         (kubectl--run-process-bg
+          (format "kubectx %s && kubens %s" (if (s-contains-p "/" context) (cadr (s-split "/" context)) context) namespace )
+          (lambda (process)
+            (kubectl-init)
+            (run-at-time 10 nil 'kubectl-get-namespaces)
+            (run-at-time 10 nil 'kubectl-get-api-resources)))
          )))
     ]])
 
-(defun dg-shell-connect-sentinel (process event)
-  (let ((b (process-buffer process)))
-    (posframe-delete-frame b)
-    (kill-buffer b)
-    (kubectl-init)
-    (run-at-time 10 nil 'kubectl-get-namespaces)
-    (run-at-time 10 nil 'kubectl-get-api-resources)))
+(defun kubectl--make-unique-resource-prefixes (resources &optional prefixes length)
+  (setq length (if length length 1)
+        prefixes (if prefixes prefixes (--map `(,(s-left length it) ,it) resources)))
+
+  (let* ((keys (-map #'car prefixes))
+         (frequencies (-frequencies keys) ))
+
+    (if (--every (= 1 it) (-map #'cdr frequencies))
+        (--map (list (s-join " " (s-split "" (car it) t)) (cadr it)) prefixes)
+      (let ((duplicate-keys (->> frequencies
+                                 (--filter (> (cdr it) 1))
+                                 (-map #'car ))))
+        (setq length (1+ length))
+        (kubectl--make-unique-resource-prefixes resources
+                                                (->> prefixes (--map (let ((key (nth 0 it))
+                                                                           (resource (nth 1 it) ))
+                                                                       (if (-contains? duplicate-keys key)
+                                                                           (list (s-left length resource) resource)
+                                                                         (list key resource)))))
+                                                length)))))
+
+
+
+(transient-define-prefix kubectl-transient-jump-to-resource ()
+  "Jump to a resource section"
+  [:class transient-column
+          :setup-children
+          (lambda (_)
+            (transient-parse-suffixes
+             'kubectl-transient--jump-to-resource
+             (->> kubectl-current-display
+                  (s-split "\n")
+                  (--filter (s-matches-p ".*/.*[[:digit:]]" it))
+                  (--map (car (s-split "/" it)))
+                  (-uniq)
+                  (kubectl--make-unique-resource-prefixes)
+                  (--map (let ((char (car it))
+                               (resource-name (cadr it)))
+                           (list char
+                                 resource-name
+                                 (lambda ()
+                                   (interactive)
+                                   (goto-char (point-min))
+                                   (search-forward (format "%s/" resource-name) nil t 1)
+                                   (beginning-of-line))))))))])
 
 (defvar kubectl-resources-current-all-ns "pods")
 
@@ -236,19 +241,37 @@
         kubectl-current-namespace kubectl-previous-namespace)
   (kubectl-get-resources))
 
-(defun kubectl-set-resources-all-no-pods ()
+(defun kubectl-set-resources-volumes ()
   (interactive)
-  (setq kubectl-resources-current "ro,ds,sts,deploy,svc,ing,cm"
+  (setq kubectl-resources-current "pvc,pv,volumeattachments"
         kubectl-all-namespaces nil
         kubectl-current-namespace kubectl-previous-namespace)
   (kubectl-get-resources))
 
-(defun kubectl-set-resources-crossplane ()
+(defun kubectl-set-resources-all-no-pods ()
   (interactive)
-  (setq kubectl-resources-current "compositions,xrd,podsecuritygroup,xpodsecuritygroup,securitygroups,sgp,clusters"
+  (setq kubectl-resources-current "ds,sts,deploy,svc,ing,cm"
         kubectl-all-namespaces nil
         kubectl-current-namespace kubectl-previous-namespace)
   (kubectl-get-resources))
+
+(defun kubectl-set-resources-karpenter ()
+  (interactive)
+  (let ((ns "kube-system"))
+    (shell-command-to-string (format "kubectl ns %s" ns))
+    (setq kubectl-resources-current "deploy,po,ec2nodeclass,nodepool,nodeclaims"
+          kubectl-all-namespaces nil
+          kubectl-current-namespace ns)
+    (kubectl-get-resources "karpenter")))
+
+(defun kubectl-set-resources-karpenter-crds ()
+  (interactive)
+  (let ((ns "kube-system"))
+    (shell-command-to-string (format "kubectl ns %s" ns))
+    (setq kubectl-resources-current "nodeclaims,ec2nodeclass,nodepool"
+          kubectl-all-namespaces nil
+          kubectl-current-namespace ns)
+    (kubectl-get-resources)))
 
 (defun kubectl-add-resource (resource)
   (interactive (list (completing-read (format "Resource to query for: %s," kubectl-resources-current) (-concat kubectl-api-abbreviations kubectl-api-resource-names) nil nil)))

@@ -1,5 +1,10 @@
+;; (use-package epc
+;;   :ensure t
+;;   :demand t)
+
 (require 's)
 (require 'dash)
+(require 'epc)
 (require 'kubectl-process)
 (require 'kubectl-edit-mode)
 (require 'kubectl-command-mode)

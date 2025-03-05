@@ -152,7 +152,7 @@
       ("\\b\\(statefulset\\)[^/ ]+/[^ ]+ +\\([0-9]+\\)/\\2" 0 '(:foreground ,fairy-mint-600))
       ("\\b\\(statefulset\\)[^/ ]+/[^ ]+ +[0-9]+/[0-9]+" 0 '(:foreground ,fairy-carrot-600))
 
-      ("^\\(node/ip-[^ ]+\\).*\\(Ready\\)"
+      ("^\\(node/ip?-[^ ]+\\).*\\(Ready\\)"
        (1 '(:foreground ,fairy-sky-600))
        (2 '(:foreground ,fairy-mint-600))
        )

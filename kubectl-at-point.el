@@ -1,3 +1,5 @@
+;;; -*- lexical-binding: t; -*-
+
 (defun kubectl-copy-resource-at-point ()
   (interactive)
   (let ((resource-at-point (s-trim (kubectl-current-line-resource-as-string))))
@@ -20,26 +22,31 @@
   (let* ((current-line-resource-name (car (s-split " " (substring-no-properties (current-line-contents)))))
          (current-line-resource-kind (car (s-split "/" current-line-resource-name))))
     (if (s-equals-p current-line-resource-kind "pod")
-        (kubectl--pod-exec current-line-resource-name "debug")
+        (kubectl--pod-debug current-line-resource-name)
       (kubectl--node-debug current-line-resource-name))))
 
 (defun kubectl--pod-exec (current-line-resource-name &optional command)
   (interactive)
   (let ((cmd (if command
                  command
-               "shell")))
-    (kubectl--open-shell-with-command (format "pk %s %s" cmd (s-right 5 current-line-resource-name)))))
+               "sh")))
+    (kubectl--open-shell-with-command (format "kubectl exec -it %s -- %s" current-line-resource-name cmd))))
+
+(defun kubectl--pod-debug (current-line-resource-name)
+  (interactive)
+  (kubectl--open-shell-with-command (format "kubectl debug %s  --stdin --tty --image=public.ecr.aws/docker/library/alpine:3.20" current-line-resource-name)))
 
 (defun kubectl--node-debug (current-line-resource-name)
   (interactive)
   (let ((node-ip-string (cadr (s-split "/\\|\\." current-line-resource-name))))
     (kubectl--open-shell-with-command
-     (format "kubectl debug --namespace kube-system %s --stdin --tty --image=748801462010.dkr.ecr.us-west-1.amazonaws.com/pk-debug:nonroot"
+     (format "kubectl debug --namespace kube-system %s --stdin --tty --image=public.ecr.aws/docker/library/alpine:3.20"
              current-line-resource-name node-ip-string))))
 
 (defun kubectl-pod-logs ()
   (interactive)
-  (let ((has-one-container (s-contains? "/1 " (current-line-contents)))
+  (let ((default-directory kubectl--my-directory)
+        (has-one-container (s-contains? "/1 " (current-line-contents)))
         (pod-at-point (car (s-split " " (substring-no-properties (current-line-contents))))))
     (if has-one-container
         (kubectl--open-shell-with-command (format "kubectl logs --tail=50 -f %s" pod-at-point))
@@ -50,7 +57,8 @@
                              (s-trim)
                              (s-split "\n"))
                         nil
-                        t)))
+
+                        nil)))
         (kubectl--open-shell-with-command (format "kubectl logs --tail=50 -f %s --container=%s" pod-at-point container)))
       )
     ))
@@ -64,49 +72,101 @@
     (insert command)
     (comint-send-input)))
 
-(defun kubectl-port-forward (port)
-  (interactive "sPort to forward: ")
-  (let* ((cmd (format "kubectl port-forward %s %s" (kubectl-current-line-resource-as-string) port)))
-    (message cmd)
-    (async-shell-command cmd)))
+(defun kubectl-port-forward ()
+  (interactive)
+  (let ((ports (->> (format "kubectl get %s -ojson | jq -r  '.spec.containers[].ports[].containerPort'" (kubectl-current-line-resource-as-string))
+                    (shell-command-to-string)
+                    (s-trim)
+                    (s-split "\n"))))
+    (let* ((port (completing-read "choose a port to forward: " ports nil nil nil t))
+           (local-port (if (s-equals-p "80" port) "8080" port))
+           (cmd (format "kubectl port-forward %s %s:%s"
+                        (kubectl-current-line-resource-as-string)
+                        local-port
+                        port)))
+      (message cmd)
+      (async-shell-command cmd)
+      (browse-url (format "http://localhost:%s" local-port)))))
 
 (defun kubectl-get-yaml-at-point ()
   (interactive)
   (kubectl--run-process-and-pop (format "kubectl get %s --output yaml" (kubectl-current-line-resource-as-string))))
 
+(defun kubectl-act-on-point-or-region (prompt action-fn)
+  (let* ((resource-at-point (kubectl-current-line-resource-as-string))
+         (resources-at-point (if (region-active-p)
+                                 (--> (buffer-substring-no-properties (region-beginning) (region-end))
+                                      (s-split "\n" it t)
+                                      (-map 'kubectl-line-resource-as-string it))
+                               (list resource-at-point)))
+         (default-directory kubectl--my-directory)
+         (bpr-process-mode 'kubectl-command-mode)
+         (prompt-with-resources (format "%s\n\n%s\n\n" prompt (s-join "\n" resources-at-point))))
+    (when (y-or-n-p prompt-with-resources)
+      (--map (apply action-fn (list it)) resources-at-point))))
+
 (defun kubectl-delete-resource-at-point ()
   (interactive)
-  (let* ((resource-at-point (kubectl-current-line-resource-as-string))
-         (prompt (format "Confirm DELETE %s (cluster: %s | context: %s | namespace: %s) ?"
-                         resource-at-point
+  (let* ((prompt (format "Confirm DELETE (cluster: %s | context: %s | namespace: %s)?"
                          kubectl-current-cluster
                          kubectl-current-context
-                         kubectl-current-namespace))
-         (default-directory kubectl--my-directory)
-         (bpr-process-mode 'kubectl-command-mode))
-    (when (y-or-n-p prompt)
-      (bpr-spawn (format "kubectl delete %s" resource-at-point)))))
+                         kubectl-current-namespace)))
+    (kubectl-act-on-point-or-region prompt (lambda (resource) (bpr-spawn (format "kubectl delete %s" resource))))))
+
+(defun kubectl-force-delete-resource-at-point ()
+  (interactive)
+  (let* ((prompt (format "Confirm FORCE DELETE (cluster: %s | context: %s | namespace: %s)?"
+                         kubectl-current-cluster
+                         kubectl-current-context
+                         kubectl-current-namespace)))
+    (kubectl-act-on-point-or-region prompt (lambda (resource) (bpr-spawn (format "kubectl delete --force %s" resource))))))
+
+
+(defun kubectl-scale-workload-at-point ()
+  (interactive)
+  (let* ((replicas (read-from-minibuffer "Number of replicas to scale to: "))
+         (prompt (format "Confirm scale: %s replicas (cluster: %s | context: %s | namespace: %s)?"
+                         replicas
+                         kubectl-current-cluster
+                         kubectl-current-context
+                         kubectl-current-namespace)))
+    (kubectl-act-on-point-or-region prompt (lambda (resource) (bpr-spawn (format "TIME=\"%s\" kubectl scale --replicas=%s %s" (format-time-string "%Y-%m-%dT%H:%M:%SZ" nil "UTC") replicas resource))))))
 
 (defun kubectl-unmark-last-applied-configuration-at-point ()
   (interactive)
-  (let* ((resource-at-point (kubectl-current-line-resource-as-string))
-         (annotation "kubectl.kubernetes.io/last-applied-configuration")
-         (prompt (format "Confirm REMOVE annotation %s %s- (cluster: %s | context: %s | namespace: %s) ?"
-                         resource-at-point
-                         annotation
+  (let* ((annotation "kubectl.kubernetes.io/last-applied-configuration")
+         (prompt (format "Confirm REMOVE annotation (cluster: %s | context: %s | namespace: %s)?\n    %s-"
                          kubectl-current-cluster
                          kubectl-current-context
-                         kubectl-current-namespace))
-         (default-directory kubectl--my-directory)
-         (bpr-process-mode 'kubectl-command-mode))
-    (when (y-or-n-p prompt)
-      (message "saving a copy first")
-      (let* ((yaml (shell-command-to-string (format "kubectl get %s --output yaml" resource-at-point)))
-             (name (apply 'format "%s/%s-%s.yaml" (-insert-at 1 (format-time-string "%s" (current-time)) (s-split "/" kubectl-edit--current-resource))))
-             (filename (f-join kubectl-edit--folder name)))
-        (f-mkdir (f-dirname filename))
-        (f-write-text yaml 'utf-8 filename))
-      (bpr-spawn (format "kubectl annotate %s %s-" resource-at-point annotation)))))
+                         kubectl-current-namespace
+                         annotation)))
+    (kubectl-act-on-point-or-region
+     prompt
+     (lambda (resource-at-point)
+       (message (format "%s: saving a copy first..." resource-at-point))
+       (let* ((yaml (shell-command-to-string (format "kubectl get %s --output yaml" resource-at-point)))
+              (name (apply 'format "%s/%s-%s.yaml" (-insert-at 1 (format-time-string "%s" (current-time)) (s-split "/" kubectl-edit--current-resource))))
+              (filename (f-join kubectl-edit--folder name)))
+         (f-mkdir (f-dirname filename))
+         (f-write-text yaml 'utf-8 filename))
+       (bpr-spawn (format "kubectl annotate %s %s-" resource-at-point annotation))))))
+
+(defun kubectl-remove-finalizers ()
+  (interactive)
+  (let* ((prompt (format "Confirm REMOVE finalizer (cluster: %s | context: %s | namespace: %s)?\n"
+                         kubectl-current-cluster
+                         kubectl-current-context
+                         kubectl-current-namespace)))
+    (kubectl-act-on-point-or-region
+     prompt
+     (lambda (resource-at-point)
+       (message (format "%s: saving a copy first..." resource-at-point))
+       (let* ((yaml (shell-command-to-string (format "kubectl get %s --output yaml" resource-at-point)))
+              (name (apply 'format "%s/%s-%s.yaml" (-insert-at 1 (format-time-string "%s" (current-time)) (s-split "/" kubectl-edit--current-resource))))
+              (filename (f-join kubectl-edit--folder name)))
+         (f-mkdir (f-dirname filename))
+         (f-write-text yaml 'utf-8 filename))
+       (bpr-spawn (format "kubectl patch %s -p '{\"metadata\":{\"finalizers\":[]}}' --type=merge" resource-at-point))))))
 
 (defun kubectl-restart-workload-at-point ()
   (interactive)
@@ -128,6 +188,31 @@
     (when (y-or-n-p prompt)
       (bpr-spawn restart-command))))
 
+(defun kubectl-open-grafana-workload-at-point (&optional context)
+  (interactive)
+  (let* ((resource-at-point (kubectl-current-line-resource-as-string))
+         (current-line-resource-kind (car (s-split "/" resource-at-point)))
+         (query-parameters (->> `(
+                                  (refresh "10s")
+                                  (var-namespace ,kubectl-current-namespace)
+                                  (var-type ,(car (s-split "\\." current-line-resource-kind)))
+                                  (var-workload ,(cadr (s-split "/" resource-at-point)))
+                                  (var-pod ,(cadr (s-split "/" resource-at-point)))
+                                  )
+                                (--map (format "%s=%s" (car it) (cadr it)))
+                                (s-join "&")))
+         (grafana-url (format "http://kps-grafana.telemetry.svc.%s.local" (if context context kubectl-current-context)))
+         (path (cond ((s-equals-p "pod" current-line-resource-kind) (s-replace "%" "%%" "d/6581e46e4e5c7ba40a07646395ef7b23/kubernetes-compute-resources-pod"))
+                     (t (s-replace "%" "%%" "d/a164a7f0339f99e89cea5cb47e9be617/kubernetes-%2f-compute-resources-%2f-workload")))))
+    (browse-url (format "%s/%s?%s" grafana-url path query-parameters))))
+
+(defun kubectl-open-grafana-workload-at-point-all-clusters ()
+  (interactive)
+  (->> kubectl-available-contexts
+       (--map (kubectl-open-grafana-workload-at-point (cadr (s-split "/" it))))))
+
+
+
 (defun kubectl-cordon-nodes-at-point ()
   (interactive)
   (let* ((nodes (kubectl-get-resources-at-point-or-region))
@@ -141,6 +226,13 @@
     (when (y-or-n-p prompt)
       (bpr-spawn command))
     ))
+
+(defun kubectl-view-node-on-line ()
+  (interactive)
+  (let* ((node-like (s-match "ip-.*.ec2.internal" (substring-no-properties (current-line-contents)))))
+    (when node-like
+      (kubectl--run-process-and-pop (format "kubectl describe node/%s" (car node-like))))))
+
 
 (defun kubectl-drain-nodes-at-point ()
   (interactive)

@@ -2,27 +2,20 @@
 
 (defvar kubectl-all-namespaces nil)
 
-(defun kubectl--ini-read (ini-config-alist profile key)
-  (cdr (assoc key (cdr (assoc profile ini-config-alist)))))
-
 (defun kubectl--get-summary ()
   (let* ((kube-config-filename "~/.kube/config")
-         (pd-kubectx-config (ini-decode "~/.pd-kubectx/config"))
-         (ini-profile "DEFAULT")
-         (current-context-name (kubectl--ini-read pd-kubectx-config ini-profile "context"))
-         (current-context (kubectl--ini-read pd-kubectx-config ini-profile "context"))
-         (role (kubectl--ini-read pd-kubectx-config ini-profile "aws_okta_assumed_role"))
+         (current-context-name (s-trim (shell-command-to-string "kubectl config current-context")))
+         (current-context current-context-name)
+         (role (getenv "AWS_PROFILE"))
          (available-contexts (kubectl--get-available-contexts))
-         (namespace (if kubectl-all-namespaces
-                        "All Namespaces"
-                      (kubectl--ini-read pd-kubectx-config ini-profile "namespace")))
+         (namespace (s-trim (shell-command-to-string "kubens -c")))
          (context (-concat `(
                              ("context" ,(format "%s | %s | %s" (kubectl--cluster-color current-context-name) namespace role)))
-                           `(("session" ,(kubectl--get-remaining-time)))
+                           ;; `(("session" ,(kubectl--get-remaining-time)))
                            `(("resources" ,(if kubectl-all-namespaces
                                                kubectl-resources-current-all-ns
                                              kubectl-resources-current)))
-                           `(("grep" ,(if kubectl--transient-grep-needle kubectl--transient-grep-needle "")))
+                           `(("grep" ,(if kubectl--transient-grep-needle kubectl--transient-grep-needle "-")))
                            )))
     (setq kubectl-available-contexts available-contexts
           kubectl-current-context current-context-name
@@ -39,13 +32,7 @@
     (kubectl--color context color)))
 
 (defun kubectl--get-remaining-time ()
-  (let* ((pd-kubectx-config (ini-decode "~/.pd-kubectx/config"))
-         (ini-profile "DEFAULT")
-         (expiration (kubectl--ini-read pd-kubectx-config ini-profile "aws_okta_session_expiration"))
-         (remaining-time (time-subtract (seconds-to-time (string-to-number expiration)) (current-time)))
-         (expired (<= (car remaining-time) -1))
-         (remaining-minutes (/ (cadr remaining-time ) 60)))
-    (format "%s%sm" (if expired "-" "") (number-to-string remaining-minutes))))
+  "0")
 
 (defun kubectl--color (text color)
   (let* ((colors '(("fairy-sky-100"      "#def8ff")

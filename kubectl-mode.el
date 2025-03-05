@@ -22,8 +22,8 @@
 (defvar kubectl-is-pulling "false")
 
 (defvar kubectl-main-buffer-name "*kubectl*")
-(defvar kubectl-resources-default "ro,ds,sts,deploy,po,svc,ing,cm")
-(defvar kubectl-resources-current "ro,ds,sts,deploy,po,svc,ing,cm")
+(defvar kubectl-resources-default "ds,sts,deploy,po,svc,ing,cm")
+(defvar kubectl-resources-current "ds,sts,deploy,po,svc,ing,cm")
 (defvar kubectl-api-abbreviations '())
 (defvar kubectl-api-resource-names '())
 (defvar kubectl--command-options "")
@@ -36,13 +36,14 @@
   (buffer-disable-undo)
   (setq truncate-lines t)
   (setq buffer-read-only t)
+  (hl-line-mode)
   (define-key kubectl-mode-map (kbd "r") 'kubectl-transient-choose-resource)
   (define-key kubectl-mode-map (kbd "t") 'kubectl-toggle-capacity)
-  (define-key kubectl-mode-map (kbd "|") 'kubectl-transient-grep)
+  (define-key kubectl-mode-map (kbd "|") 'kubectl-get-resources-grep)
   (define-key kubectl-mode-map (kbd "A") 'kubectl-transient-choose-resource-all-ns)
-  (define-key kubectl-mode-map (kbd "G") 'kubectl-toggle-autorefresh)
   (define-key kubectl-mode-map (kbd "N") 'kubectl-choose-namespace)
   (define-key kubectl-mode-map (kbd "C") 'kubectl-transient-choose-context)
+  (define-key kubectl-mode-map (kbd "j") 'kubectl-transient-jump-to-resource)
   (define-key kubectl-mode-map (kbd "s") 'kubectl-sort-by)
 
   (define-key kubectl-mode-map (kbd "w") 'kubectl-copy-resource-at-point)
@@ -83,14 +84,16 @@
       (kubectl-print-buffer)
       (kubectl-get-resources))))
 
+(defun kubectl--refresh-available-contexts ()
+  (interactive)
+  (setq kubectl--cache-clusters (s-split "\n" (shell-command-to-string "kubectl config get-clusters | grep -v NAME") t)))
+
+(kubectl--refresh-available-contexts)
 (defun kubectl--get-available-contexts ()
-  (->> "~/.pd-kubectx/clusters"
-       (directory-files)
-       (--filter (s-contains-p ".json" it))
-       (--map (s-chop-suffix ".json" it))))
+  kubectl--cache-clusters)
 
 (defun kubectl-get-namespaces ()
-  (kubectl--cache-namespaces (--map (s-chop-prefix "> " it) (s-split "\n" (shell-command-to-string "pk ns --list")))))
+  (kubectl--cache-namespaces (--map (s-chop-prefix "> " it) (s-split "\n" (shell-command-to-string "kubectl get ns --no-headers --output=custom-columns=NAME:.metadata.name")))))
 
 (defun kubectl--cache-namespaces (namespaces)
   (setq kubectl-cached-namespaces (-uniq (-sort 'string-lessp (-concat namespaces kubectl-cached-namespaces)))))
@@ -101,7 +104,7 @@
 (defun kubectl--parse-api-resources (process)
   (let ((buffer (process-buffer process)))
     (with-current-buffer buffer
-      (let ((lines (-slice (--map (s-split " +" it) (s-split "\n" (buffer-substring-no-properties (point-min) (point-max)))) 1)))
+      (let ((lines (-slice (--map (s-split " +" it t) (s-split "\n" (buffer-substring-no-properties (point-min) (point-max)))) 1)))
         (setq kubectl-api-abbreviations (--map (cadr it) (--filter (eq (length it) 5) lines)))
         (setq kubectl-api-resource-names (--map (car it) lines))))))
 
@@ -133,7 +136,7 @@
                       nil
                       nil)))
   (when (not (s-blank-p ns))
-    (shell-command-to-string (format "pk ns %s" ns))
+    (shell-command-to-string (format "kubectl ns %s" ns))
     (setq kubectl--transient-grep-needle nil
           kubectl-current-display ""
           kubectl-all-namespaces (s-blank-p ns)
