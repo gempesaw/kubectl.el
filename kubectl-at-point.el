@@ -12,9 +12,10 @@
 (defun kubectl-shell-at-point ()
   (interactive)
   (let* ((current-line-resource-name (car (s-split " " (substring-no-properties (current-line-contents)))))
-         (current-line-resource-kind (car (s-split "/" current-line-resource-name))))
+         (current-line-resource-kind (car (s-split "/" current-line-resource-name)))
+         (current-namespace kubectl-current-namespace))
     (if (s-equals-p current-line-resource-kind "pod")
-        (kubectl--pod-exec current-line-resource-name)
+        (kubectl--pod-exec current-line-resource-name current-namespace)
       (kubectl--node-debug current-line-resource-name))))
 
 (defun kubectl-debug-at-point ()
@@ -25,12 +26,12 @@
         (kubectl--pod-debug current-line-resource-name)
       (kubectl--node-debug current-line-resource-name))))
 
-(defun kubectl--pod-exec (current-line-resource-name &optional command)
+(defun kubectl--pod-exec (current-line-resource-name current-namespace &optional command)
   (interactive)
   (let ((cmd (if command
                  command
                "sh")))
-    (kubectl--open-shell-with-command (format "kubectl exec -it %s -- %s" current-line-resource-name cmd))))
+    (kubectl--open-shell-with-command (format "kubectl --namespace %s exec -it %s -- %s" current-namespace current-line-resource-name cmd))))
 
 (defun kubectl--pod-debug (current-line-resource-name)
   (interactive)
@@ -40,25 +41,29 @@
   (interactive)
   (let ((node-ip-string (cadr (s-split "/\\|\\." current-line-resource-name))))
     (kubectl--open-shell-with-command
-     (format "kubectl debug --namespace kube-system %s --stdin --tty --image=public.ecr.aws/docker/library/alpine:3.20"
+     (format "kubectl debug %s --stdin --tty --image=public.ecr.aws/docker/library/alpine:3.20"
              current-line-resource-name node-ip-string))))
+
+(defun kubectl--get-pod-containers (pod)
+  (->> (format "kubectl get %s -ojson | jq -r  '.spec.initContainers + .spec.containers | .[] | .name'" pod)
+       (shell-command-to-string)
+       (s-trim)
+       (s-split "\n")))
+
+(defun kubectl--choose-container (pod &optional optional-containers)
+  (let ((containers (if optional-containers
+                        optional-containers
+                      (kubectl--get-pod-containers pod))))
+    (completing-read "choose a container" containers nil nil)))
 
 (defun kubectl-pod-logs ()
   (interactive)
-  (let ((default-directory kubectl--my-directory)
-        (has-one-container (s-contains? "/1 " (current-line-contents)))
-        (pod-at-point (car (s-split " " (substring-no-properties (current-line-contents))))))
-    (if has-one-container
+  (let* ((default-directory kubectl--my-directory)
+         (pod-at-point (car (s-split " " (substring-no-properties (current-line-contents)))))
+         (containers (kubectl--get-pod-containers pod-at-point)))
+    (if (= 1 (length containers))
         (kubectl--open-shell-with-command (format "kubectl logs --tail=50 -f %s" pod-at-point))
-      (let ((container (completing-read
-                        "choose a container"
-                        (->> (format "kubectl get %s -ojson | jq -r  '.spec.containers[].name'" pod-at-point)
-                             (shell-command-to-string)
-                             (s-trim)
-                             (s-split "\n"))
-                        nil
-
-                        nil)))
+      (let ((container (kubectl--choose-container pod-at-point containers)))
         (kubectl--open-shell-with-command (format "kubectl logs --tail=50 -f %s --container=%s" pod-at-point container)))
       )
     ))
@@ -130,7 +135,13 @@
                          kubectl-current-cluster
                          kubectl-current-context
                          kubectl-current-namespace)))
-    (kubectl-act-on-point-or-region prompt (lambda (resource) (bpr-spawn (format "TIME=\"%s\" kubectl scale --replicas=%s %s" (format-time-string "%Y-%m-%dT%H:%M:%SZ" nil "UTC") replicas resource))))))
+    (kubectl-act-on-point-or-region
+     prompt
+     (lambda (resource)
+       (let ((command (if (s-contains-p "autoscalingrunnerset" resource)
+                          (format "TIME=\"%s\" kubectl patch %s --type=merge -p '{\"spec\":{\"minRunners\":%s}}'" (format-time-string "%Y-%m-%dT%H:%M:%SZ" nil "UTC") resource replicas)
+                        (format "TIME=\"%s\" kubectl scale --replicas=%s %s" (format-time-string "%Y-%m-%dT%H:%M:%SZ" nil "UTC") replicas resource))))
+         (bpr-spawn command))))))
 
 (defun kubectl-unmark-last-applied-configuration-at-point ()
   (interactive)
@@ -201,9 +212,16 @@
                                   )
                                 (--map (format "%s=%s" (car it) (cadr it)))
                                 (s-join "&")))
-         (grafana-url (format "http://kps-grafana.telemetry.svc.%s.local" (if context context kubectl-current-context)))
-         (path (cond ((s-equals-p "pod" current-line-resource-kind) (s-replace "%" "%%" "d/6581e46e4e5c7ba40a07646395ef7b23/kubernetes-compute-resources-pod"))
-                     (t (s-replace "%" "%%" "d/a164a7f0339f99e89cea5cb47e9be617/kubernetes-%2f-compute-resources-%2f-workload")))))
+         (grafana-url (format "http://kps-grafana.kube-prometheus-stack.svc.%s.local" (if context context kubectl-current-context)))
+         (path (cond
+                ((s-equals-p "pod" current-line-resource-kind) (s-replace "%" "%%" "d/6581e46e4e5c7ba40a07646395ef7b23/kubernetes-compute-resources-pod"))
+                ((s-equals-p "service" current-line-resource-kind) (setq grafana-url (format "http://%s.%s.svc.%s.local"
+                                                                                             (cadr (s-split "/" resource-at-point))
+                                                                                             kubectl-current-namespace
+                                                                                             (if context context kubectl-current-context))
+                                                                         path ""
+                                                                         query-parameters ""))
+                (t (s-replace "%" "%%" "d/a164a7f0339f99e89cea5cb47e9be617/kubernetes-%2f-compute-resources-%2f-workload")))))
     (browse-url (format "%s/%s?%s" grafana-url path query-parameters))))
 
 (defun kubectl-open-grafana-workload-at-point-all-clusters ()
@@ -217,7 +235,23 @@
   (interactive)
   (let* ((nodes (kubectl-get-resources-at-point-or-region))
          (command (format "kubectl cordon %s" (s-join " " nodes)))
+         (default-directory kubectl--my-directory)
          (prompt (format "Confirm cordon %s nodes (cluster: %s | context: %s | namespace: %s) %s?"
+                         (length nodes)
+                         kubectl-current-cluster
+                         kubectl-current-context
+                         kubectl-current-namespace
+                         command)))
+    (when (y-or-n-p prompt)
+      (bpr-spawn command))
+    ))
+
+(defun kubectl-uncordon-nodes-at-point ()
+  (interactive)
+  (let* ((nodes (kubectl-get-resources-at-point-or-region))
+         (command (format "kubectl uncordon %s" (s-join " " nodes)))
+         (default-directory kubectl--my-directory)
+         (prompt (format "Confirm uncordon %s nodes (cluster: %s | context: %s | namespace: %s) %s?"
                          (length nodes)
                          kubectl-current-cluster
                          kubectl-current-context
@@ -229,9 +263,9 @@
 
 (defun kubectl-view-node-on-line ()
   (interactive)
-  (let* ((node-like (s-match "ip-.*.ec2.internal" (substring-no-properties (current-line-contents)))))
+  (let* ((node-like (s-trim (car (s-match " i-.*?internal" (substring-no-properties (current-line-contents)))))))
     (when node-like
-      (kubectl--run-process-and-pop (format "kubectl describe node/%s" (car node-like))))))
+      (kubectl--run-process-and-pop (format "kubectl describe node/%s" node-like)))))
 
 
 (defun kubectl-drain-nodes-at-point ()
@@ -254,7 +288,7 @@
   (interactive)
   (let* ((resources (kubectl-get-resources-at-point-or-region))
          (commands (->> resources
-                        (--map (format "kubectl create job --from=%s %s-trigger-dgempesaw-%s" it (cadr (s-split "/" it)) (floor (float-time))))))
+                        (--map (format "kubectl create job --from=%s %s" it (s-chop-prefix "-" (s-right 60 (format "%s-trigger-dgempesaw-%s" (cadr (s-split "/" it)) (floor (float-time)))))))))
          (prompt (format "Confirm create job (cluster: %s | context: %s | namespace: %s)? %s"
                          kubectl-current-cluster
                          kubectl-current-context
