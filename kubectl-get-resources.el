@@ -16,6 +16,7 @@
 (defun kubectl-get-resources (&optional grep-needle-arg)
   (when (process-live-p kubectl--watch-process)
     (delete-process kubectl--watch-process))
+  (kill-matching-buffers-no-ask " kubectl--resource-buffer-" t)
   (let ((resources (if kubectl-all-namespaces kubectl-resources-current-all-ns kubectl-resources-current))
         (namespace (if kubectl-all-namespaces "All Namespaces" kubectl-current-namespace))
         (sort-column (if kubectl-current-sort-column kubectl-current-sort-column "NAME"))
@@ -25,11 +26,17 @@
                            kubectl--transient-grep-needle
                          "-"))))
     (setq kubectl--watch-process
-          (with-environment-variables (("EMACS_SERVER_SOCKET_DIR" server-socket-dir))
+          (with-environment-variables (("EMACS_SERVER_SOCKET_DIR" server-socket-dir)
+                                       ("ASDF_PYTHON_VERSION" "3.12.2"))
             (start-process
              "kubectl-watch"
              kubectl-process-buffer-name
-             "python" (f-expand (f-join kubectl--my-directory "watch.py")) resources namespace sort-column grep-needle))
+             "python"
+             (f-expand (f-join kubectl--my-directory "watch.py"))
+             resources
+             namespace
+             sort-column
+             grep-needle))
           kubectl--transient-grep-needle grep-needle)
     (kubectl--refresh-current-display)
     (kubectl--refresh-kcnodes)

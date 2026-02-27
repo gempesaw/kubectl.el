@@ -48,11 +48,21 @@
     (kubectl--update-process-buffer-string command t)))
 
 (defun kubectl--pop-process (process)
-  (let ((buffer (process-buffer process)))
+  (let ((buffer (process-buffer process))
+        (user-buffer (current-buffer)))
     (with-current-buffer buffer
       (let ((inhibit-read-only t))
-        (pop-to-buffer buffer)
-        (goto-char (point-min))))))
+        ;; Humanize storage values before displaying
+        (kubectl--humanize-storage-values)
+        
+        (if (not (eq (buffer-name user-buffer) (buffer-name buffer)))
+            (pop-to-buffer buffer))
+
+        (if kubectl--command-refresh-restore-line
+            (progn
+              (goto-line kubectl--command-refresh-restore-line)
+              (setq kubectl--command-refresh-restore-line nil))
+          (goto-char (point-min)))))))
 
 (defun kubectl--set-options (command)
   (if (s-starts-with? "kubectl " command)
