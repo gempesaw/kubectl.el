@@ -1,6 +1,8 @@
 ;; -*- lexical-binding: t; -*-
 
+
 (require 'transient)
+(require 'ht)
 
 (defvar kubectl-previous-namespace "")
 
@@ -37,15 +39,16 @@
   ["workloads"
    ("s" "scale workload" kubectl-scale-workload-at-point)
    ("r" "restart workload" kubectl-restart-workload-at-point)
-   ("j" "create job from cronjob" kubectl-run-cronjob-at-point)
+   ("j" "create job from cronjob/job" kubectl-run-cronjob-at-point)
    ("g" "open in grafana" kubectl-open-grafana-workload-at-point)
    ("G" "open in grafana (all clusters)" kubectl-open-grafana-workload-at-point-all-clusters)
    ]
 
   ["nodes"
-   ("n" "view node on line" kubectl-view-node-on-line)
-   ("c" "cordon nodes" kubectl-cordon-nodes-at-point)
-   ("d" "drain nodes" kubectl-drain-nodes-at-point)]
+   ("n n" "view node on line" kubectl-view-node-on-line)
+   ("n c" "cordon nodes" kubectl-cordon-nodes-at-point)
+   ("n u" "uncordon nodes" kubectl-uncordon-nodes-at-point)
+   ("n d" "drain nodes" kubectl-drain-nodes-at-point)]
   )
 
 (transient-define-prefix kubectl-transient-choose-resource ()
@@ -69,7 +72,8 @@
     ("K" "karpenter CRDs" kubectl-set-resources-karpenter-crds)
     ("j" "jobs (cronjobs,jobs,pods)" kubectl-set-resources-jobs)
     ("e" "externalsecrets (clusterexternalsecrets,clustersecretstores,externalsecrets,secretstores,secrets)" kubectl-set-resources-secrets)
-    ("v" "volumes (pvc,pv,volumeattachments)" kubectl-set-resources-volumes)
+    ("g" "Github" kubectl-set-resources-github)
+    ("v" "volumes" kubectl-set-resources-volumes)
 
     ("p" "all no pods (ds,sts,deploy,svc,ing,cm)" kubectl-set-resources-all-no-pods)
     ]
@@ -88,6 +92,77 @@
                                         )
                                   (kubectl-get-resources)))])
 
+(defun kubectl--extract-account-id-from-arn (arn)
+  "Extract AWS account ID from an EKS cluster ARN.
+ARN format: arn:aws:eks:REGION:ACCOUNT_ID:cluster/NAME"
+  (when (s-matches-p "^arn:aws:eks:" arn)
+    (nth 4 (s-split ":" arn))))
+
+(defun kubectl--extract-account-id-from-cluster (context)
+  "Extract AWS account ID from the cluster ARN for CONTEXT.
+Returns the 12-digit account ID or nil if not found.
+Tries context name, cluster reference, and cluster name for ARN."
+  (or (kubectl--extract-account-id-from-arn context)
+      (let* ((cluster-ref (s-trim (shell-command-to-string
+                                   (format "kubectl config view -o jsonpath='{.contexts[?(@.name==\"%s\")].context.cluster}'" context)))))
+        (or (kubectl--extract-account-id-from-arn cluster-ref)
+            (let* ((clusters-json (shell-command-to-string "kubectl config view -o json"))
+                   (server-url (s-trim (shell-command-to-string
+                                        (format "kubectl config view -o jsonpath='{.clusters[?(@.name==\"%s\")].cluster.server}'" cluster-ref)))))
+              (when (not (string-empty-p server-url))
+                (let ((arn-cluster (s-trim (shell-command-to-string
+                                            (format "kubectl config view -o jsonpath='{.clusters[?(@.cluster.server==\"%s\")].name}'" server-url)))))
+                  (kubectl--extract-account-id-from-arn arn-cluster))))))))
+
+(defun kubectl--parse-aws-config ()
+  "Parse ~/.aws/config and return alist of (account-id . profiles).
+Each entry maps an account ID to a list of profile names."
+  (let ((config-file (expand-file-name "~/.aws/config"))
+        (profiles-by-account (make-hash-table :test 'equal))
+        current-profile
+        current-account)
+    (when (file-exists-p config-file)
+      (with-temp-buffer
+        (insert-file-contents config-file)
+        (goto-char (point-min))
+        (while (not (eobp))
+          (let ((line (buffer-substring-no-properties
+                       (line-beginning-position) (line-end-position))))
+            (cond
+             ((s-matches-p "^\\[profile " line)
+              (when (and current-profile current-account)
+                (puthash current-account
+                         (cons current-profile (gethash current-account profiles-by-account))
+                         profiles-by-account))
+              (setq current-profile (s-trim (s-chop-suffix "]" (s-chop-prefix "[profile " line)))
+                    current-account nil))
+             ((s-matches-p "^sso_account_id" line)
+              (setq current-account (s-trim (cadr (s-split "=" line)))))))
+          (forward-line 1))
+        (when (and current-profile current-account)
+          (puthash current-account
+                   (cons current-profile (gethash current-account profiles-by-account))
+                   profiles-by-account))))
+    profiles-by-account))
+
+(defun kubectl--select-best-profile (profiles)
+  "Select the best profile from PROFILES list.
+Priority: super-useri > power-user > kubernetes-admin > read-only."
+  (or (--first (s-contains-p "super-user" it) profiles)
+      (--first (s-contains-p "power-user" it) profiles)
+      (--first (s-contains-p "kubernetes-admin" it) profiles)
+      (--first (s-contains-p "read-only" it) profiles)
+      (car profiles)))
+
+(defun kubectl--get-aws-role (context)
+  "Get the AWS role/profile for CONTEXT by looking up the cluster's account ID."
+  (if-let* ((account-id (kubectl--extract-account-id-from-cluster context))
+            (profiles-by-account (kubectl--parse-aws-config))
+            (profiles (gethash account-id profiles-by-account)))
+      (kubectl--select-best-profile profiles)
+    nil))
+
+
 (transient-define-prefix kubectl-transient-choose-context ()
   "Choose cluster and AWS profile alias"
 
@@ -97,6 +172,7 @@
     :init-value (lambda (ob)
                   (setf (slot-value ob 'value) kubectl-current-context))
     :reader (lambda (prompt initial-input history)
+              (kubectl--refresh-available-contexts)
               (completing-read prompt (kubectl--get-available-contexts) nil nil initial-input history)))
    ("n" "Namespace" "ns="
     :always-read t
@@ -111,20 +187,6 @@
                   (setf (slot-value ob 'value) kubectl-resources-current))
     :reader (lambda (prompt initial-input history)
               (s-join "," (completing-read-multiple prompt kubectl-api-resource-names nil nil initial-input history))))
-   ("a" "AWS Profile" "a="
-    :always-read t
-    ;; :multi-value t
-    :init-value (lambda (ob)
-                  (setf (slot-value ob 'value) kubectl-current-role))
-    :reader (lambda (prompt initial-input history)
-              (completing-read prompt
-                               (--> "aws configure list-profiles"
-                                    (shell-command-to-string it)
-                                    (s-split "\n" it t))
-                               nil
-                               nil
-                               initial-input
-                               history)))
    ]
   ["Connect"
    [("SPC" "Connect"
@@ -133,7 +195,7 @@
        (let* ((context (transient-arg-value "c=" args))
               (namespace (transient-arg-value "ns=" args))
               (resources (transient-arg-value "r=" args))
-              (aws-role (transient-arg-value "a=" args)))
+              (aws-role (kubectl--get-aws-role context)))
          (dg-modular-ensure-aws-profile-login aws-role)
          (setq kubectl-current-context context
                kubectl-current-namespace namespace
@@ -141,13 +203,72 @@
                kubectl-current-role aws-role
                )
          (kubectl--run-process-bg
-          (format "kubectx %s && kubens %s" (if (s-contains-p "/" context) (cadr (s-split "/" context)) context) namespace )
+          (format "kubectx %s && (kubens %s || kubens default)" (if (s-contains-p "/" context) (cadr (s-split "/" context)) context) namespace )
           (lambda (process)
             (kubectl-init)
             (run-at-time 10 nil 'kubectl-get-namespaces)
             (run-at-time 10 nil 'kubectl-get-api-resources)))
          )))
     ]])
+
+(defun kubectl-add-kubeconfig ()
+  "Merge kubeconfig from region or kill-ring into ~/.kube/config."
+  (interactive)
+  (let* ((kubeconfig-content
+          (if (use-region-p)
+              (buffer-substring-no-properties (region-beginning) (region-end))
+            (current-kill 0)))
+         (temp-file (make-temp-file "kubeconfig-"))
+         (kube-dir (expand-file-name "~/.kube"))
+         (config-file (expand-file-name "config" kube-dir)))
+
+    ;; Validate it looks like a kubeconfig
+    (unless (string-match-p "apiVersion" kubeconfig-content)
+      (error "Content doesn't look like a kubeconfig (no apiVersion found)"))
+
+    ;; Clean up context names - remove "user@" prefix
+    (setq kubeconfig-content
+          (replace-regexp-in-string "user@" "" kubeconfig-content))
+
+    ;; Create ~/.kube directory if it doesn't exist
+    (unless (file-directory-p kube-dir)
+      (make-directory kube-dir t))
+
+    ;; Write kubeconfig content to temp file
+    (with-temp-file temp-file
+      (insert kubeconfig-content))
+
+    ;; Backup existing config if it exists
+    (when (file-exists-p config-file)
+      (let ((backup-file (expand-file-name
+                          (format "config.backup-%s" (format-time-string "%s"))
+                          kube-dir)))
+        (copy-file config-file backup-file)
+        (message "📦 Backed up existing config")))
+
+    ;; Merge configs using kubectl
+    (let* ((kubeconfig-env (if (file-exists-p config-file)
+                               (format "KUBECONFIG=%s:%s" config-file temp-file)
+                             (format "KUBECONFIG=%s" temp-file)))
+           (merge-command (format "%s kubectl config view --merge --flatten --raw" kubeconfig-env))
+           (new-config-file (concat config-file ".new")))
+
+      ;; Run kubectl merge and capture output
+      (with-temp-buffer
+        (let ((exit-code (call-process-shell-command merge-command nil t nil)))
+          (if (= exit-code 0)
+              (progn
+                ;; Write merged config to new file
+                (write-region (point-min) (point-max) new-config-file)
+                ;; Replace original config
+                (rename-file new-config-file config-file t)
+                (message "✅ Kubeconfig merged successfully!")
+                ;; Show contexts
+                (shell-command "kubectl config get-contexts | tail -5"))
+            (error "Failed to merge kubeconfig: %s" (buffer-string))))))
+
+    ;; Clean up temp file
+    (delete-file temp-file)))
 
 (defun kubectl--make-unique-resource-prefixes (resources &optional prefixes length)
   (setq length (if length length 1)
@@ -243,7 +364,7 @@
 
 (defun kubectl-set-resources-volumes ()
   (interactive)
-  (setq kubectl-resources-current "pvc,pv,volumeattachments"
+  (setq kubectl-resources-current "pvc,pv,volumeattachments,storageclasses"
         kubectl-all-namespaces nil
         kubectl-current-namespace kubectl-previous-namespace)
   (kubectl-get-resources))
@@ -263,6 +384,12 @@
           kubectl-all-namespaces nil
           kubectl-current-namespace ns)
     (kubectl-get-resources "karpenter")))
+
+(defun kubectl-set-resources-github ()
+  (interactive)
+  (setq kubectl-resources-current "autoscalingrunnersets,ephemeralrunnersets,ephemeralrunners,deploy,rdeploy,rrs,po"
+        kubectl-all-namespaces nil)
+  (kubectl-get-resources))
 
 (defun kubectl-set-resources-karpenter-crds ()
   (interactive)
@@ -309,5 +436,47 @@
   (when (not (s-matches-p "All" kubectl-current-namespace))
     (setq kubectl-previous-namespace kubectl-current-namespace))
   (kubectl-get-resources))
+
+(defun kubectl-remove-cluster-from-kubeconfig (cluster-name)
+  "Remove a cluster from the kubectl config.
+Removes entries from clusters[], contexts[], and users[] arrays."
+  (interactive
+   (list (completing-read "Cluster to remove: "
+                          (s-split "\n"
+                                   (shell-command-to-string "kubectl config get-clusters | grep -v NAME")
+                                   t))))
+
+  (let ((config-file (expand-file-name "~/.kube/config")))
+    ;; Backup existing config
+    (when (file-exists-p config-file)
+      (let ((backup-file (expand-file-name
+                          (format "config.backup-%s" (format-time-string "%s"))
+                          (file-name-directory config-file))))
+        (copy-file config-file backup-file)
+        (message "📦 Backed up existing config to %s" (file-name-nondirectory backup-file))))
+
+    ;; Remove cluster entry
+    (shell-command (format "kubectl config delete-cluster %s" cluster-name))
+
+    ;; Remove any contexts that use this cluster
+    (let* ((contexts-output (shell-command-to-string "kubectl config get-contexts -o name"))
+           (all-contexts (s-split "\n" contexts-output t)))
+      (dolist (context all-contexts)
+        (when (not (string-empty-p context))
+          (let ((context-cluster (s-trim (shell-command-to-string
+                                          (format "kubectl config view -o jsonpath='{.contexts[?(@.name==\"%s\")].context.cluster}'" context)))))
+            (when (string= context-cluster cluster-name)
+              (shell-command (format "kubectl config delete-context %s" context))
+              (message "🗑️  Removed context: %s" context))))))
+
+    ;; Remove any users that might be orphaned (users with same name as cluster)
+    (let* ((users-output (shell-command-to-string "kubectl config view -o jsonpath='{.users[*].name}'"))
+           (all-users (s-split " " users-output t)))
+      (dolist (user all-users)
+        (when (string= user cluster-name)
+          (shell-command (format "kubectl config delete-user %s" user))
+          (message "🗑️  Removed user: %s" user))))
+
+    (message "✅ Successfully removed cluster '%s' from kubectl config" cluster-name)))
 
 (provide 'kubectl-transient)
