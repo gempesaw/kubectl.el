@@ -29,7 +29,11 @@
       (cd cwd)
       (kubectl-mode))))
 
-(global-set-key (kbd "M-s-k") (lambda () (interactive (kubectl 4))))
+(defun kubectl-prompt ()
+  (interactive)
+  (kubectl 4))
+
+(global-set-key (kbd "M-s-k") 'kubectl-prompt)
 
 
 (provide 'kubectl)
