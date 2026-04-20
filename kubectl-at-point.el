@@ -41,7 +41,7 @@
   (interactive)
   (let ((node-ip-string (cadr (s-split "/\\|\\." current-line-resource-name))))
     (kubectl--open-shell-with-command
-     (format "kubectl debug %s --stdin --tty --image=public.ecr.aws/docker/library/alpine:3.20"
+     (format "kubectl debug %s --profile=sysadmin --stdin --tty --image=public.ecr.aws/docker/library/alpine:3.20"
              current-line-resource-name node-ip-string))))
 
 (defun kubectl--get-pod-containers (pod)
@@ -267,6 +267,13 @@
     (when node-like
       (kubectl--run-process-and-pop (format "kubectl describe node/%s" node-like)))))
 
+(defun kubectl-copy-as-kill-node-on-line ()
+  (interactive)
+  (let* ((node-like (s-trim (car (s-match " i-.*?internal" (substring-no-properties (current-line-contents)))))))
+    (when node-like
+      (kill-new node-like)
+      (message "Copied: %s" node-like))))
+
 
 (defun kubectl-drain-nodes-at-point ()
   (interactive)
@@ -304,5 +311,50 @@
            (s-split "\n")
            (-map 'kubectl-line-resource-as-string))
     `(,(kubectl-current-line-resource-as-string))))
+
+(defun kubectl--extract-pod-status (line)
+  (when (s-starts-with? "pod/" line)
+    (let* ((parts (s-split " +" line t))
+           (ready-idx (--find-index (s-matches-p "^[0-9]+/[0-9]+$" it) parts)))
+      (when ready-idx
+        (nth (1+ ready-idx) parts)))))
+
+(defun kubectl--get-pods-by-status ()
+  (let ((pods-by-status (make-hash-table :test 'equal))
+        (output (shell-command-to-string "kubectl get pods --no-headers")))
+    (--each (s-split "\n" (s-trim output))
+      (let* ((parts (s-split " +" it t))
+             (name (nth 0 parts))
+             (status (nth 2 parts)))
+        (when (and name status)
+          (puthash status
+                   (cons (format "pod/%s" name) (gethash status pods-by-status))
+                   pods-by-status))))
+    pods-by-status))
+
+(defun kubectl-bulk-delete-pods-by-status ()
+  (interactive)
+  (let* ((pods-by-status (kubectl--get-pods-by-status))
+         (status-choices (let (keys)
+                           (maphash (lambda (k v)
+                                      (push (format "%s (%d)" k (length v)) keys))
+                                    pods-by-status)
+                           keys))
+         (chosen (completing-read "Delete pods with status: " status-choices nil t))
+         (chosen-status (s-trim (car (s-split " (" chosen))))
+         (pods (gethash chosen-status pods-by-status))
+         (default-directory kubectl--my-directory)
+         (force (y-or-n-p "Force delete? "))
+         (force-flag (if force " --force" ""))
+         (prompt (format "Confirm %s %d pods (cluster: %s | context: %s | namespace: %s)?\n\n%s\n"
+                         (if force "FORCE DELETE" "DELETE")
+                         (length pods)
+                         kubectl-current-cluster
+                         kubectl-current-context
+                         kubectl-current-namespace
+                         (s-join "\n" pods))))
+    (when (y-or-n-p prompt)
+      (--each pods
+        (bpr-spawn (format "kubectl delete%s %s" force-flag it))))))
 
 (provide 'kubectl-at-point)

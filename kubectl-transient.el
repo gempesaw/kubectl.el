@@ -44,8 +44,12 @@
    ("G" "open in grafana (all clusters)" kubectl-open-grafana-workload-at-point-all-clusters)
    ]
 
+  ["bulk"
+   ("B" "bulk delete pods by status" kubectl-bulk-delete-pods-by-status)]
+
   ["nodes"
    ("n n" "view node on line" kubectl-view-node-on-line)
+   ("n w" "copy node name" kubectl-copy-as-kill-node-on-line)
    ("n c" "cordon nodes" kubectl-cordon-nodes-at-point)
    ("n u" "uncordon nodes" kubectl-uncordon-nodes-at-point)
    ("n d" "drain nodes" kubectl-drain-nodes-at-point)]

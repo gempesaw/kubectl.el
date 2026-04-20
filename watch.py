@@ -564,10 +564,10 @@ async def watch_nodes():
         "MUse",
         "GPUs",
     ] + headers[1:]
-    # sort_column = get_sort_column(node_table)
-    # node_table.sortby = sort_column
-    # if sort_column in SORT_FUNCTIONS:
-    #     node_table.sort_key = SORT_FUNCTIONS[sort_column]
+    sort_column = get_sort_column(node_table)
+    node_table.sortby = sort_column
+    if sort_column in SORT_FUNCTIONS:
+        node_table.sort_key = SORT_FUNCTIONS[sort_column]
 
     while True:
         [name, *status] = await add_placeholders_async(header_start_positions, p)
