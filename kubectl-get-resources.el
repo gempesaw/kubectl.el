@@ -16,6 +16,21 @@
 (defvar kubectl--transient-grep-auto nil)
 (defvar kubectl--transient-grep-needle "-")
 
+(defvar kubectl--sidecar-connection nil
+  "Process object for the accepted Go-sidecar socket connection.
+Set by the watch filter on first byte. Use `kubectl--sidecar-send' to write to it.")
+
+(defvar kubectl--expanded-aliases (ht-create)
+  "Hash table tracking which resource aliases are in their non-default limit state.
+Key is the alias (\"po\", \"deploy\", \"kcnodes\", ...); value is non-nil if toggled.")
+
+(defvar kubectl--default-limits
+  '(("po" . 20) ("pod" . 20) ("pods" . 20)
+    ("ds" . 20) ("sts" . 20) ("deploy" . 20)
+    ("svc" . 20) ("ing" . 20) ("cm" . 20)
+    ("kcnodes" . 0))
+  "Default display row limit per alias. 0 means no limit.")
+
 (defvar kubectl--display-redraw-timer nil)
 (defvar kubectl--cancel-watch-timer nil)
 
@@ -65,6 +80,9 @@ Populated by the socket filter. The keys keep the historical
              :noquery t)))))
 
 (defun kubectl--watch-filter (proc chunk)
+  ;; Remember the accepted-connection process so we can write back to the sidecar.
+  (unless (eq kubectl--sidecar-connection proc)
+    (setq kubectl--sidecar-connection proc))
   (let* ((acc (concat (or (process-get proc :kubectl-buf) "") chunk))
          (lines (split-string acc "\n"))
          (partial (car (last lines)))
@@ -73,6 +91,73 @@ Populated by the socket filter. The keys keep the historical
     (dolist (line complete)
       (when (> (length line) 0)
         (kubectl--watch-handle-message line)))))
+
+(defun kubectl--sidecar-send (plist)
+  "Send PLIST as a JSON line to the connected Go sidecar."
+  (when (process-live-p kubectl--sidecar-connection)
+    (process-send-string kubectl--sidecar-connection
+                         (concat (json-encode plist) "\n"))))
+
+(defun kubectl--active-resources ()
+  "Return the resource-alias list active right now (single ns vs all-ns)."
+  (s-split "," (if kubectl-all-namespaces
+                   kubectl-resources-current-all-ns
+                 kubectl-resources-current)))
+
+(defun kubectl--alias-in-active (&rest aliases)
+  "Return the first of ALIASES that's in the active resources list, or the first arg."
+  (let ((current (kubectl--active-resources)))
+    (or (--first (member it current) aliases)
+        (car aliases))))
+
+(defun kubectl--alias-for-row-kind (kind)
+  "Map a buffer row's kubectl `--show-kind' prefix to the user-facing resource alias.
+KIND examples: \"pod\", \"deployment.apps\", \"node\". Returns nil for unknown kinds."
+  (cond
+   ((string= kind "pod") (kubectl--alias-in-active "po" "pod" "pods"))
+   ((string= kind "service") (kubectl--alias-in-active "svc" "service" "services"))
+   ((string= kind "configmap") (kubectl--alias-in-active "cm" "configmap" "configmaps"))
+   ((string= kind "deployment.apps") (kubectl--alias-in-active "deploy" "deployment" "deployments"))
+   ((string= kind "daemonset.apps") (kubectl--alias-in-active "ds" "daemonset" "daemonsets"))
+   ((string= kind "statefulset.apps") (kubectl--alias-in-active "sts" "statefulset" "statefulsets"))
+   ((string= kind "ingress.networking.k8s.io") (kubectl--alias-in-active "ing" "ingress" "ingresses"))
+   ((string= kind "node") "kcnodes")))
+
+(defun kubectl--current-section-alias ()
+  "Return the alias of the resource section the cursor is in.
+Works by walking backward through the buffer until a row like \"pod/foo\" is found."
+  (save-excursion
+    (let ((alias nil)
+          (limit (max (point-min) (- (point) 50000)))) ; safety: don't walk forever
+      (beginning-of-line)
+      (while (and (not alias) (> (point) limit))
+        (if (looking-at "^\\([a-z][a-z0-9.]*\\)/")
+            (setq alias (kubectl--alias-for-row-kind (match-string 1)))
+          (forward-line -1)))
+      alias)))
+
+(defun kubectl--default-limit (alias)
+  "Return the default row limit for ALIAS (0 = no limit). Falls back to 20."
+  (or (cdr (assoc alias kubectl--default-limits)) 20))
+
+(defun kubectl-toggle-expand-section ()
+  "Toggle full-vs-default row display for the section at point.
+For sections with a default limit (e.g. pods, deployments) this flips between top-N and full.
+For unlimited sections (nodes) it flips between full and top-20."
+  (interactive)
+  (let ((alias (kubectl--current-section-alias)))
+    (if (not alias)
+        (message "kubectl: cursor isn't in a resource section")
+      (let* ((default (kubectl--default-limit alias))
+             (was-expanded (ht-get kubectl--expanded-aliases alias))
+             (now-expanded (not was-expanded))
+             (limit (cond
+                     ((not now-expanded) default)
+                     ((= default 0) 20)      ; default unlimited → collapse to 20
+                     (t 0))))                ; default limited → expand to all
+        (ht-set! kubectl--expanded-aliases alias now-expanded)
+        (kubectl--sidecar-send
+         (list :type "set_limit" :alias alias :limit limit))))))
 
 (defun kubectl--watch-handle-message (line)
   (condition-case err
@@ -90,6 +175,8 @@ Populated by the socket filter. The keys keep the historical
   (kubectl--cancel-timer 'kubectl--display-redraw-timer)
   (kubectl--cancel-timer 'kubectl--cancel-watch-timer)
   (ht-clear! kubectl--resource-contents)
+  (ht-clear! kubectl--expanded-aliases)
+  (setq kubectl--sidecar-connection nil)
   (kubectl--watch-server-start)
   (let* ((resources (if kubectl-all-namespaces kubectl-resources-current-all-ns kubectl-resources-current))
          (namespace (if kubectl-all-namespaces "All Namespaces" kubectl-current-namespace))

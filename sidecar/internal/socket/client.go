@@ -1,6 +1,7 @@
 package socket
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -13,10 +14,29 @@ type Client struct {
 	mu       sync.Mutex
 	conn     net.Conn
 	lastSent map[string]string // buffer -> last contents we shipped, for skip-if-unchanged
+	inbox    chan IncomingMessage
+}
+
+// IncomingMessage is the shape of control messages sent by Emacs back to the sidecar.
+// Currently only one type — "set_limit" — but the shape is extensible.
+type IncomingMessage struct {
+	Type  string `json:"type"`
+	Alias string `json:"alias"`
+	Limit int    `json:"limit"`
 }
 
 func New(path string) *Client {
-	return &Client{path: path, lastSent: make(map[string]string)}
+	return &Client{
+		path:     path,
+		lastSent: make(map[string]string),
+		inbox:    make(chan IncomingMessage, 16),
+	}
+}
+
+// Inbox returns the channel of inbound control messages. The reader goroutine
+// is started on first connect; messages arrive here.
+func (c *Client) Inbox() <-chan IncomingMessage {
+	return c.inbox
 }
 
 type message struct {
@@ -60,12 +80,36 @@ func (c *Client) connectLocked() error {
 		conn, err := net.Dial("unix", c.path)
 		if err == nil {
 			c.conn = conn
+			// Start a reader goroutine bound to this connection. Closes when conn closes.
+			go c.readLoop(conn)
 			return nil
 		}
 		if attempt >= 20 {
 			return fmt.Errorf("connect %s: %w", c.path, err)
 		}
 		time.Sleep(500 * time.Millisecond)
+	}
+}
+
+// readLoop reads newline-delimited JSON messages from the connection and forwards
+// them to the inbox channel. Exits when the connection is closed.
+func (c *Client) readLoop(conn net.Conn) {
+	scanner := bufio.NewScanner(conn)
+	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		if len(line) == 0 {
+			continue
+		}
+		var msg IncomingMessage
+		if err := json.Unmarshal(line, &msg); err != nil {
+			continue
+		}
+		select {
+		case c.inbox <- msg:
+		default:
+			// inbox is full; drop the message rather than block the reader.
+		}
 	}
 }
 

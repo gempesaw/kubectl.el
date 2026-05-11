@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/gempesaw/kubectl.el/sidecar/internal/control"
 	"github.com/gempesaw/kubectl.el/sidecar/internal/k8s"
 	"github.com/gempesaw/kubectl.el/sidecar/internal/render"
 	"github.com/gempesaw/kubectl.el/sidecar/internal/socket"
@@ -95,6 +96,9 @@ func main() {
 	sock := socket.New(flags.SocketPath)
 	defer sock.Close()
 
+	ctrl := control.New()
+	go routeControlMessages(ctx, sock, ctrl)
+
 	// Resolve each requested alias to a ResourceID. Skip unknown ones.
 	type subscription struct {
 		alias string
@@ -128,15 +132,15 @@ func main() {
 		wg.Add(1)
 		bufferName := bufferPrefix + sub.alias
 		if k8s.IsPod(sub.alias) {
-			go func(id k8s.ResourceID, buf string) {
+			go func(alias string, id k8s.ResourceID, buf string) {
 				defer wg.Done()
-				runPodLoop(ctx, clients, sock, flags, id, buf)
-			}(sub.id, bufferName)
+				runPodLoop(ctx, clients, sock, ctrl, flags, alias, id, buf)
+			}(sub.alias, sub.id, bufferName)
 		} else {
-			go func(id k8s.ResourceID, buf string) {
+			go func(alias string, id k8s.ResourceID, buf string) {
 				defer wg.Done()
-				runGenericLoop(ctx, clients, sock, flags, id, buf)
-			}(sub.id, bufferName)
+				runGenericLoop(ctx, clients, sock, ctrl, flags, alias, id, buf)
+			}(sub.alias, sub.id, bufferName)
 		}
 	}
 
@@ -144,10 +148,31 @@ func main() {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		runNodeLoop(ctx, clients, sock, flags, bufferPrefix+nodeBufferAlias)
+		runNodeLoop(ctx, clients, sock, ctrl, flags, bufferPrefix+nodeBufferAlias)
 	}()
 
 	wg.Wait()
+}
+
+// routeControlMessages reads inbound socket messages and dispatches them to the
+// shared control state.
+func routeControlMessages(ctx context.Context, sock *socket.Client, ctrl *control.State) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case msg, ok := <-sock.Inbox():
+			if !ok {
+				return
+			}
+			switch msg.Type {
+			case "set_limit":
+				ctrl.SetLimit(msg.Alias, msg.Limit)
+			default:
+				log.Printf("unknown control message type: %q", msg.Type)
+			}
+		}
+	}
 }
 
 func signalContext() (context.Context, context.CancelFunc) {
@@ -163,8 +188,9 @@ func signalContext() (context.Context, context.CancelFunc) {
 
 // runGenericLoop drives a non-pod resource: server-side Table → state map → render.
 // No augmentation, no metrics — just the cells the apiserver gives us.
-func runGenericLoop(ctx context.Context, clients *k8s.Clients, sock *socket.Client, flags *Flags, id k8s.ResourceID, bufferName string) {
+func runGenericLoop(ctx context.Context, clients *k8s.Clients, sock *socket.Client, ctrl *control.State, flags *Flags, alias string, id k8s.ResourceID, bufferName string) {
 	ns := flags.EffectiveNamespace()
+	wake := ctrl.Register(alias)
 
 	rows := map[string]k8s.Row{}
 	var columns []k8s.TableColumn
@@ -175,7 +201,7 @@ func runGenericLoop(ctx context.Context, clients *k8s.Clients, sock *socket.Clie
 			Grep:        flags.Grep,
 			SortColumn:  flags.SortColumn,
 			ReverseSort: flags.SortColumn != "AGE",
-			Limit:       displayLimit,
+			Limit:       ctrl.LimitOrDefault(alias, displayLimit),
 		})
 		if err := sock.Send(bufferName, out); err != nil {
 			log.Printf("[%s] send: %v", id.Plural, err)
@@ -198,14 +224,14 @@ func runGenericLoop(ctx context.Context, clients *k8s.Clients, sock *socket.Clie
 		send()
 
 		events, errs := clients.WatchResource(ctx, id, ns, snap.ResourceVersion)
-		if !drainEvents(ctx, events, errs, rows, send) {
+		if !drainEvents(ctx, events, errs, wake, rows, send) {
 			return // ctx cancelled
 		}
 	}
 }
 
-// drainEvents reads from events/errs until either closes. Returns false if ctx ended.
-func drainEvents(ctx context.Context, events <-chan k8s.Event, errs <-chan error, rows map[string]k8s.Row, send func()) bool {
+// drainEvents reads from events/errs/wake until events/errs close. Returns false if ctx ended.
+func drainEvents(ctx context.Context, events <-chan k8s.Event, errs <-chan error, wake <-chan struct{}, rows map[string]k8s.Row, send func()) bool {
 	for {
 		select {
 		case <-ctx.Done():
@@ -230,6 +256,8 @@ func drainEvents(ctx context.Context, events <-chan k8s.Event, errs <-chan error
 				log.Printf("watch: %v", err)
 			}
 			return true
+		case <-wake:
+			send()
 		}
 	}
 }
@@ -237,8 +265,9 @@ func drainEvents(ctx context.Context, events <-chan k8s.Event, errs <-chan error
 // runPodLoop is the pod-specialized watcher: same generic List/Watch + a metrics
 // poller running in parallel + a row-augmentation pass that prepends the 6 metric
 // columns to each row.
-func runPodLoop(ctx context.Context, clients *k8s.Clients, sock *socket.Client, flags *Flags, id k8s.ResourceID, bufferName string) {
+func runPodLoop(ctx context.Context, clients *k8s.Clients, sock *socket.Client, ctrl *control.State, flags *Flags, alias string, id k8s.ResourceID, bufferName string) {
 	ns := flags.EffectiveNamespace()
+	wake := ctrl.Register(alias)
 
 	rows := map[string]k8s.Row{}
 	var columns []k8s.TableColumn
@@ -253,7 +282,7 @@ func runPodLoop(ctx context.Context, clients *k8s.Clients, sock *socket.Client, 
 			Grep:        flags.Grep,
 			SortColumn:  flags.SortColumn,
 			ReverseSort: flags.SortColumn != "AGE",
-			Limit:       displayLimit,
+			Limit:       ctrl.LimitOrDefault(alias, displayLimit),
 		})
 		if err := sock.Send(bufferName, out); err != nil {
 			log.Printf("[pods] send: %v", err)
@@ -276,7 +305,7 @@ func runPodLoop(ctx context.Context, clients *k8s.Clients, sock *socket.Client, 
 		send()
 
 		events, errs := clients.WatchResource(ctx, id, ns, snap.ResourceVersion)
-		if !drainPodEvents(ctx, events, errs, metricsCh, rows, &metrics, send) {
+		if !drainPodEvents(ctx, events, errs, metricsCh, wake, rows, &metrics, send) {
 			return
 		}
 	}
@@ -287,6 +316,7 @@ func drainPodEvents(
 	events <-chan k8s.Event,
 	errs <-chan error,
 	metricsCh <-chan map[string]k8s.PodUtilization,
+	wake <-chan struct{},
 	rows map[string]k8s.Row,
 	metrics *map[string]k8s.PodUtilization,
 	send func(),
@@ -315,6 +345,8 @@ func drainPodEvents(
 				log.Printf("[pods] watch: %v", err)
 			}
 			return true
+		case <-wake:
+			send()
 		case m := <-metricsCh:
 			*metrics = m
 			send()
@@ -527,7 +559,10 @@ func formatMemUtil(useMi, reqMi int64) string {
 // runNodeLoop is the unconditional node watcher. Same pattern as the resource loops
 // but with two side goroutines (metrics @60s, cluster-pod aggregation @15s) feeding
 // the renderer, and node-specific column assembly.
-func runNodeLoop(ctx context.Context, clients *k8s.Clients, sock *socket.Client, flags *Flags, bufferName string) {
+func runNodeLoop(ctx context.Context, clients *k8s.Clients, sock *socket.Client, ctrl *control.State, flags *Flags, bufferName string) {
+	const nodeAlias = "kcnodes"
+	wake := ctrl.Register(nodeAlias)
+
 	rows := map[string]k8s.Row{} // key: node name
 	var columns []k8s.TableColumn
 	metrics := map[string]k8s.NodeUtilization{}
@@ -545,7 +580,7 @@ func runNodeLoop(ctx context.Context, clients *k8s.Clients, sock *socket.Client,
 			Grep:        flags.Grep,
 			SortColumn:  flags.SortColumn,
 			ReverseSort: flags.SortColumn != "AGE",
-			Limit:       0, // show all nodes
+			Limit:       ctrl.LimitOrDefault(nodeAlias, 0),
 		})
 		if err := sock.Send(bufferName, out); err != nil {
 			log.Printf("[nodes] send: %v", err)
@@ -570,7 +605,7 @@ func runNodeLoop(ctx context.Context, clients *k8s.Clients, sock *socket.Client,
 		send()
 
 		events, errs := clients.WatchResource(ctx, k8s.NodeResource, "", snap.ResourceVersion)
-		if !drainNodeEvents(ctx, events, errs, metricsCh, aggCh, rows, &metrics, &aggregates, send) {
+		if !drainNodeEvents(ctx, events, errs, metricsCh, aggCh, wake, rows, &metrics, &aggregates, send) {
 			return
 		}
 	}
@@ -582,6 +617,7 @@ func drainNodeEvents(
 	errs <-chan error,
 	metricsCh <-chan map[string]k8s.NodeUtilization,
 	aggCh <-chan map[string]*k8s.NodeAggregate,
+	wake <-chan struct{},
 	rows map[string]k8s.Row,
 	metrics *map[string]k8s.NodeUtilization,
 	aggregates *map[string]*k8s.NodeAggregate,
@@ -614,6 +650,8 @@ func drainNodeEvents(
 				log.Printf("[nodes] watch: %v", err)
 			}
 			return true
+		case <-wake:
+			send()
 		case m := <-metricsCh:
 			*metrics = m
 			send()
