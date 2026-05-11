@@ -19,7 +19,6 @@ import (
 
 const (
 	allNamespacesArg     = "All Namespaces"
-	bufferPrefix         = " kubectl--resource-buffer-"
 	nodeBufferAlias      = "kcnodes"
 	displayLimit         = 20
 	metricsInterval      = 10 * time.Second
@@ -130,7 +129,7 @@ func main() {
 	var wg sync.WaitGroup
 	for _, sub := range subs {
 		wg.Add(1)
-		bufferName := bufferPrefix + sub.alias
+		bufferName := sub.alias
 		if k8s.IsPod(sub.alias) {
 			go func(alias string, id k8s.ResourceID, buf string) {
 				defer wg.Done()
@@ -148,7 +147,7 @@ func main() {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		runNodeLoop(ctx, clients, sock, ctrl, flags, bufferPrefix+nodeBufferAlias)
+		runNodeLoop(ctx, clients, sock, ctrl, flags, nodeBufferAlias)
 	}()
 
 	wg.Wait()

@@ -12,7 +12,7 @@
 (defun kubectl-print-buffer ()
   (let ((inhibit-read-only t)
         (context (kubectl--get-summary))
-        (nodes (ht-get kubectl--resource-contents " kubectl--resource-buffer-kcnodes" "")))
+        (nodes (ht-get kubectl--resource-contents "kcnodes" "")))
     (with-current-buffer (get-buffer-create kubectl-replace-buffer)
       (erase-buffer)
       (insert (s-join "\n"

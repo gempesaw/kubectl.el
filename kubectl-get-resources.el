@@ -41,9 +41,8 @@ Key is the alias (\"po\", \"deploy\", \"kcnodes\", ...); value is non-nil if tog
     (set sym nil)))
 
 (defvar kubectl--resource-contents (ht-create)
-  "Hash table mapping resource buffer names to rendered contents.
-Populated by the socket filter. The keys keep the historical
-\" kubectl--resource-buffer-<name>\" prefix so the wire protocol stays stable.")
+  "Hash table mapping resource alias (e.g. \"po\", \"deploy\", \"kcnodes\") to
+the rendered contents string. Populated by the socket filter.")
 
 (defun kubectl--ensure-sidecar-built ()
   "Build the Go sidecar via make; return the binary path. Errors if build fails."
@@ -218,9 +217,7 @@ For unlimited sections (nodes) it flips between full and top-20."
   (when (process-live-p kubectl--watch-sidecar-process)
     (let* ((resources (s-split "," (if kubectl-all-namespaces kubectl-resources-current-all-ns kubectl-resources-current)))
            (contents (->> resources
-                          (--map (ht-get kubectl--resource-contents
-                                         (format " kubectl--resource-buffer-%s" it)
-                                         ""))
+                          (--map (ht-get kubectl--resource-contents it ""))
                           (--remove (s-blank? it))
                           (s-join "\n\n"))))
       (unless (s-equals-p contents kubectl-current-display)
