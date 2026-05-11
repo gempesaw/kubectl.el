@@ -38,7 +38,7 @@
   (setq buffer-read-only t)
   (hl-line-mode)
   (define-key kubectl-mode-map (kbd "r") 'kubectl-transient-choose-resource)
-  (define-key kubectl-mode-map (kbd "t") 'kubectl-toggle-capacity)
+  (define-key kubectl-mode-map (kbd "t") 'kubectl-toggle-nodes)
   (define-key kubectl-mode-map (kbd "|") 'kubectl-get-resources-grep)
   (define-key kubectl-mode-map (kbd "A") 'kubectl-transient-choose-resource-all-ns)
   (define-key kubectl-mode-map (kbd "N") 'kubectl-choose-namespace)

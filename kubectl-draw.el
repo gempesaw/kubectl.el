@@ -1,8 +1,18 @@
 (defvar kubectl-replace-buffer " *kubectl--replace-buffer*")
 
+(defvar kubectl--show-nodes nil
+  "Whether to render the nodes section in the dashboard. Toggle with `kubectl-toggle-nodes'.")
+
+(defun kubectl-toggle-nodes ()
+  "Toggle visibility of the nodes section in the kubectl dashboard."
+  (interactive)
+  (setq kubectl--show-nodes (not kubectl--show-nodes))
+  (kubectl-print-buffer))
+
 (defun kubectl-print-buffer ()
   (let ((inhibit-read-only t)
-        (context (kubectl--get-summary)))
+        (context (kubectl--get-summary))
+        (nodes (ht-get kubectl--resource-contents " kubectl--resource-buffer-kcnodes" "")))
     (with-current-buffer (get-buffer-create kubectl-replace-buffer)
       (erase-buffer)
       (insert (s-join "\n"
@@ -13,9 +23,9 @@
                                                   "All Namespaces"
                                                 (cadr it)))))
                              context)))
-      (when (and (not (eq (s-trim (s-replace "\n" "" kubectl--merged-nodes-capacity)) ""))
-                 kubectl--view-kube-capacity)
-        (insert (format "\n\n%s" kubectl--merged-nodes-capacity)))
+      (when (and kubectl--show-nodes
+                 (not (s-blank? (s-trim nodes))))
+        (insert (format "\n\n%s" nodes)))
 
       (when (not (eq kubectl-current-display ""))
         (insert (s-replace-regexp "\n\\{2,\\}" "\n\n" (format "\n\n%s" kubectl-current-display)))))
