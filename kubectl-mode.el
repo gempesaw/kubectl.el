@@ -14,6 +14,10 @@
 (defvar kubectl-available-contexts '())
 (defvar kubectl-available-namespaces '())
 (defvar kubectl-cached-namespaces '())
+(defvar kubectl-cached-namespaces-file
+  (expand-file-name "kubectl-cached-namespaces" user-emacs-directory)
+  "File where `kubectl-cached-namespaces' is persisted across Emacs sessions.
+Newline-separated, one namespace per line.")
 (defvar kubectl-current-context "")
 (defvar kubectl-current-namespace "")
 (defvar kubectl-previous-current-namespace "")
@@ -98,7 +102,34 @@
   (kubectl--cache-namespaces (--map (s-chop-prefix "> " it) (s-split "\n" (shell-command-to-string "kubectl get ns --no-headers --output=custom-columns=NAME:.metadata.name")))))
 
 (defun kubectl--cache-namespaces (namespaces)
-  (setq kubectl-cached-namespaces (-uniq (-sort 'string-lessp (-concat namespaces kubectl-cached-namespaces)))))
+  (setq kubectl-cached-namespaces (-uniq (-sort 'string-lessp (-concat namespaces kubectl-cached-namespaces))))
+  (kubectl--save-cached-namespaces))
+
+(defun kubectl--save-cached-namespaces ()
+  "Persist `kubectl-cached-namespaces' to `kubectl-cached-namespaces-file'."
+  (when kubectl-cached-namespaces
+    (with-temp-file kubectl-cached-namespaces-file
+      (insert (s-join "\n" kubectl-cached-namespaces))
+      (insert "\n"))))
+
+(defun kubectl--load-cached-namespaces ()
+  "Read namespaces previously saved by `kubectl--save-cached-namespaces'.
+Returns a list; empty if the file doesn't exist yet."
+  (when (file-exists-p kubectl-cached-namespaces-file)
+    (with-temp-buffer
+      (insert-file-contents kubectl-cached-namespaces-file)
+      (->> (buffer-substring-no-properties (point-min) (point-max))
+           (s-split "\n")
+           (--remove (s-blank? it))))))
+
+;; Hydrate the in-memory cache from disk on load, merging with anything already
+;; in memory so a re-eval doesn't drop in-session accumulation. Then flush back
+;; to disk so the merged set survives Emacs restarts.
+(setq kubectl-cached-namespaces
+      (-uniq (-sort 'string-lessp
+                    (-concat (kubectl--load-cached-namespaces)
+                             kubectl-cached-namespaces))))
+(kubectl--save-cached-namespaces)
 
 (defun kubectl-get-api-resources ()
   (kubectl--run-process-bg "kubectl api-resources" 'kubectl--parse-api-resources))
