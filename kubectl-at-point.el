@@ -332,6 +332,40 @@
                    pods-by-status))))
     pods-by-status))
 
+(defun kubectl--get-pods-detail (pod-names)
+  (let ((names (->> pod-names (--map (s-chop-prefix "pod/" it)) (s-join ","))))
+    (shell-command-to-string
+     (format "kubectl get pods --field-selector=metadata.name!=_ --no-headers -o wide 2>/dev/null | grep -E '%s'"
+             (s-join "\\|" (->> pod-names (--map (s-chop-prefix "pod/" it))))))))
+
+(defvar kubectl--bulk-delete-pods nil)
+(defvar kubectl--bulk-delete-detail nil)
+(defvar kubectl--bulk-delete-status nil)
+
+(defun kubectl--bulk-delete-execute (force)
+  (let ((pods kubectl--bulk-delete-pods)
+        (default-directory kubectl--my-directory)
+        (force-flag (if force " --force" "")))
+    (--each pods
+      (bpr-spawn (format "kubectl delete%s %s" force-flag it)))
+    (message "%s %d pods..." (if force "Force deleting" "Deleting") (length pods))))
+
+(transient-define-prefix kubectl-bulk-delete-confirm-transient ()
+  "Confirm bulk pod deletion"
+  [:description
+   (lambda ()
+     (format "DELETE %d %s pods (%s | %s | %s)\n\n%s"
+             (length kubectl--bulk-delete-pods)
+             kubectl--bulk-delete-status
+             kubectl-current-cluster
+             kubectl-current-context
+             kubectl-current-namespace
+             kubectl--bulk-delete-detail))
+   ("y" "delete" (lambda () (interactive) (kubectl--bulk-delete-execute nil)))
+   ("!" "force delete" (lambda () (interactive) (kubectl--bulk-delete-execute t)))
+   ("n" "cancel" transient-quit-one)
+   ("q" "cancel" transient-quit-one)])
+
 (defun kubectl-bulk-delete-pods-by-status ()
   (interactive)
   (let* ((pods-by-status (kubectl--get-pods-by-status))
@@ -341,20 +375,10 @@
                                     pods-by-status)
                            keys))
          (chosen (completing-read "Delete pods with status: " status-choices nil t))
-         (chosen-status (s-trim (car (s-split " (" chosen))))
-         (pods (gethash chosen-status pods-by-status))
-         (default-directory kubectl--my-directory)
-         (force (y-or-n-p "Force delete? "))
-         (force-flag (if force " --force" ""))
-         (prompt (format "Confirm %s %d pods (cluster: %s | context: %s | namespace: %s)?\n\n%s\n"
-                         (if force "FORCE DELETE" "DELETE")
-                         (length pods)
-                         kubectl-current-cluster
-                         kubectl-current-context
-                         kubectl-current-namespace
-                         (s-join "\n" pods))))
-    (when (y-or-n-p prompt)
-      (--each pods
-        (bpr-spawn (format "kubectl delete%s %s" force-flag it))))))
+         (chosen-status (s-trim (car (s-split " (" chosen)))))
+    (setq kubectl--bulk-delete-pods (gethash chosen-status pods-by-status)
+          kubectl--bulk-delete-status chosen-status
+          kubectl--bulk-delete-detail (kubectl--get-pods-detail kubectl--bulk-delete-pods))
+    (kubectl-bulk-delete-confirm-transient)))
 
 (provide 'kubectl-at-point)

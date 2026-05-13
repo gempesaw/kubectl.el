@@ -33,6 +33,7 @@
    ("K K" "delete resource" kubectl-delete-resource-at-point)
    ("K F F" "delete resource" kubectl-force-delete-resource-at-point)
    ("K f" "remove finalizers:" kubectl-remove-finalizers)
+   ("K B" "bulk delete pods by status" kubectl-bulk-delete-pods-by-status)
    ("u" "remove annotation: remove last-applied-configuration annotation" kubectl-unmark-last-applied-configuration-at-point)
    ("p" "pop to create buffer" kubectl-pop-to-create-resource-buffer)]
 
@@ -43,9 +44,6 @@
    ("g" "open in grafana" kubectl-open-grafana-workload-at-point)
    ("G" "open in grafana (all clusters)" kubectl-open-grafana-workload-at-point-all-clusters)
    ]
-
-  ["bulk"
-   ("B" "bulk delete pods by status" kubectl-bulk-delete-pods-by-status)]
 
   ["nodes"
    ("n n" "view node on line" kubectl-view-node-on-line)
