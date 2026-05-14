@@ -18,6 +18,7 @@ type ResourceID struct {
 	Group      string // "" for core, "apps" / "networking.k8s.io" / etc.
 	Version    string // typically "v1"
 	Namespaced bool
+	KindPrefix string // for kubectl --show-kind output, e.g., "deployment.apps"
 }
 
 type Snapshot struct {

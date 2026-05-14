@@ -92,6 +92,12 @@ func main() {
 		log.Fatalf("k8s clients: %v", err)
 	}
 
+	if learned, err := clients.PopulateFromDiscovery(ctx); err != nil {
+		log.Printf("discovery: %v (continuing with %d learned + static catalog)", err, learned)
+	} else if learned > 0 {
+		log.Printf("discovery: learned %d resource aliases (CRDs etc.)", learned)
+	}
+
 	sock := socket.New(flags.SocketPath)
 	defer sock.Close()
 
@@ -195,7 +201,7 @@ func runGenericLoop(ctx context.Context, clients *k8s.Clients, sock *socket.Clie
 	var columns []k8s.TableColumn
 
 	send := func() {
-		out := render.Render(buildGenericTable(columns, rows, id.Plural), render.Options{
+		out := render.Render(buildGenericTable(columns, rows, id.KindPrefix), render.Options{
 			Total:       len(rows),
 			Grep:        flags.Grep,
 			SortColumn:  flags.SortColumn,
@@ -407,21 +413,20 @@ func sleep(ctx context.Context, d time.Duration) {
 
 // buildGenericTable: kind prefix on the NAME cell ("deployment.apps/foo"), rest of
 // cells passthrough.
-func buildGenericTable(snapCols []k8s.TableColumn, rowMap map[string]k8s.Row, plural string) render.Table {
+func buildGenericTable(snapCols []k8s.TableColumn, rowMap map[string]k8s.Row, kindPrefix string) render.Table {
 	cols := make([]render.Column, len(snapCols))
 	for i, c := range snapCols {
 		cols[i] = render.Column{Name: c.Name, Format: c.Format}
 	}
 
 	nameIdx := nameColumnIndex(snapCols)
-	prefix := kindPrefixFor(plural)
 
 	rows := make([]render.Row, 0, len(rowMap))
 	for _, r := range rowMap {
 		cells := make([]string, len(r.Cells))
 		copy(cells, r.Cells)
-		if nameIdx >= 0 && nameIdx < len(cells) && prefix != "" {
-			cells[nameIdx] = prefix + "/" + cells[nameIdx]
+		if nameIdx >= 0 && nameIdx < len(cells) && kindPrefix != "" {
+			cells[nameIdx] = kindPrefix + "/" + cells[nameIdx]
 		}
 		rows = append(rows, render.Row{Cells: cells})
 	}
@@ -501,28 +506,6 @@ func nameColumnIndex(cols []k8s.TableColumn) int {
 		}
 	}
 	return -1
-}
-
-// kindPrefixFor returns the "kind.group" prefix to glue onto the NAME cell so output
-// matches kubectl's `--show-kind=true` style.
-func kindPrefixFor(plural string) string {
-	switch plural {
-	case "pods":
-		return "pod"
-	case "services":
-		return "service"
-	case "configmaps":
-		return "configmap"
-	case "deployments":
-		return "deployment.apps"
-	case "daemonsets":
-		return "daemonset.apps"
-	case "statefulsets":
-		return "statefulset.apps"
-	case "ingresses":
-		return "ingress.networking.k8s.io"
-	}
-	return ""
 }
 
 func formatCPU(milli int64) string {
