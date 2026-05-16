@@ -173,11 +173,23 @@ func routeControlMessages(ctx context.Context, sock *socket.Client, ctrl *contro
 			switch msg.Type {
 			case "set_limit":
 				ctrl.SetLimit(msg.Alias, msg.Limit)
+			case "set_sort":
+				ctrl.SetSort(msg.Alias, msg.Column)
 			default:
 				log.Printf("unknown control message type: %q", msg.Type)
 			}
 		}
 	}
+}
+
+// defaultSortFor returns the built-in default sort column for ALIAS. Nodes sort by
+// NAME (most clusters have hashed instance IDs whose AGE-based ordering is rarely
+// useful), everything else sorts by AGE (newest activity first).
+func defaultSortFor(alias string) string {
+	if alias == "kcnodes" {
+		return "NAME"
+	}
+	return "AGE"
 }
 
 func signalContext() (context.Context, context.CancelFunc) {
@@ -201,11 +213,12 @@ func runGenericLoop(ctx context.Context, clients *k8s.Clients, sock *socket.Clie
 	var columns []k8s.TableColumn
 
 	send := func() {
+		sortCol := ctrl.SortOrDefault(alias, defaultSortFor(alias))
 		out := render.Render(buildGenericTable(columns, rows, id.KindPrefix), render.Options{
 			Total:       len(rows),
 			Grep:        flags.Grep,
-			SortColumn:  flags.SortColumn,
-			ReverseSort: flags.SortColumn != "AGE",
+			SortColumn:  sortCol,
+			ReverseSort: sortCol != "AGE" && sortCol != "NAME",
 			Limit:       ctrl.LimitOrDefault(alias, displayLimit),
 		})
 		if err := sock.Send(bufferName, out); err != nil {
@@ -282,11 +295,12 @@ func runPodLoop(ctx context.Context, clients *k8s.Clients, sock *socket.Client, 
 	go pollPodMetricsForever(ctx, clients, ns, metricsCh)
 
 	send := func() {
+		sortCol := ctrl.SortOrDefault(alias, defaultSortFor(alias))
 		out := render.Render(buildPodTable(columns, rows, metrics), render.Options{
 			Total:       len(rows),
 			Grep:        flags.Grep,
-			SortColumn:  flags.SortColumn,
-			ReverseSort: flags.SortColumn != "AGE",
+			SortColumn:  sortCol,
+			ReverseSort: sortCol != "AGE" && sortCol != "NAME",
 			Limit:       ctrl.LimitOrDefault(alias, displayLimit),
 		})
 		if err := sock.Send(bufferName, out); err != nil {
@@ -557,11 +571,12 @@ func runNodeLoop(ctx context.Context, clients *k8s.Clients, sock *socket.Client,
 	go pollNodeAggregatesForever(ctx, clients, aggCh)
 
 	send := func() {
+		sortCol := ctrl.SortOrDefault(nodeAlias, defaultSortFor(nodeAlias))
 		out := render.Render(buildNodeTable(columns, rows, metrics, aggregates), render.Options{
 			Total:       len(rows),
 			Grep:        flags.Grep,
-			SortColumn:  flags.SortColumn,
-			ReverseSort: flags.SortColumn != "AGE",
+			SortColumn:  sortCol,
+			ReverseSort: sortCol != "AGE" && sortCol != "NAME",
 			Limit:       ctrl.LimitOrDefault(nodeAlias, 0),
 		})
 		if err := sock.Send(bufferName, out); err != nil {

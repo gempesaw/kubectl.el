@@ -18,11 +18,14 @@ type Client struct {
 }
 
 // IncomingMessage is the shape of control messages sent by Emacs back to the sidecar.
-// Currently only one type — "set_limit" — but the shape is extensible.
+// "type" determines which fields are populated:
+//   set_limit: alias, limit
+//   set_sort:  alias, column
 type IncomingMessage struct {
-	Type  string `json:"type"`
-	Alias string `json:"alias"`
-	Limit int    `json:"limit"`
+	Type   string `json:"type"`
+	Alias  string `json:"alias"`
+	Limit  int    `json:"limit"`
+	Column string `json:"column"`
 }
 
 func New(path string) *Client {

@@ -31,6 +31,16 @@ Key is the alias (\"po\", \"deploy\", \"kcnodes\", ...); value is non-nil if tog
     ("kcnodes" . 0))
   "Default display row limit per alias. 0 means no limit.")
 
+(defvar kubectl--sort-overrides (ht-create)
+  "Hash table tracking per-alias sort-column overrides (set via `s' on a section).
+Key is the alias; value is a column-name string.")
+
+(defvar kubectl--default-sorts
+  '(("kcnodes" . "NAME"))
+  "Default sort column per alias for the completing-read prompt.
+Anything not listed falls back to \"AGE\". Keep in sync with sidecar's
+`defaultSortFor' in cmd/kubectl-watch-sidecar/main.go.")
+
 (defvar kubectl--display-redraw-timer nil)
 (defvar kubectl--cancel-watch-timer nil)
 
@@ -175,6 +185,7 @@ For unlimited sections (nodes) it flips between full and top-20."
   (kubectl--cancel-timer 'kubectl--cancel-watch-timer)
   (ht-clear! kubectl--resource-contents)
   (ht-clear! kubectl--expanded-aliases)
+  (ht-clear! kubectl--sort-overrides)
   (setq kubectl--sidecar-connection nil)
   (kubectl--watch-server-start)
   (let* ((resources (if kubectl-all-namespaces kubectl-resources-current-all-ns kubectl-resources-current))
@@ -233,20 +244,49 @@ For unlimited sections (nodes) it flips between full and top-20."
     (setq kubectl--cancel-watch-timer
           (run-with-timer 60 nil 'kubectl--get-resources-cancel))))
 
-(defvar kubectl-current-sort-column "NAME")
+(defvar kubectl-current-sort-column "NAME"
+  "Legacy global default; still passed as argv[3] to the sidecar but the sidecar
+ignores it now that defaults are per-resource and overrides are per-section.")
+
+(defun kubectl--default-sort (alias)
+  "Return the default sort column for ALIAS (falls back to \"AGE\")."
+  (or (cdr (assoc alias kubectl--default-sorts)) "AGE"))
+
+(defun kubectl--effective-sort (alias)
+  "Return the currently effective sort column for ALIAS (override if any, else default)."
+  (or (ht-get kubectl--sort-overrides alias)
+      (kubectl--default-sort alias)))
+
+(defun kubectl--columns-for-section-at-point ()
+  "Return the column-name list from the NAME header line of the section at point.
+Walks backward to find the closest \"NAME ...\" line in the visible buffer."
+  (save-excursion
+    (beginning-of-line)
+    (when (or (looking-at "^NAME ")
+              (re-search-backward "^NAME " nil t))
+      (let ((line (buffer-substring-no-properties (line-beginning-position) (line-end-position))))
+        ;; Split on whitespace runs of 2+ to keep multi-word column names intact
+        ;; ("NOMINATED NODE", "READINESS GATES"). Strip the count suffix on NAME.
+        (->> (split-string line "  +" t)
+             (--map (s-trim it))
+             (--map (if (s-starts-with? "NAME " it) "NAME" it)))))))
+
 (defun kubectl-sort-by (sort-column)
-  (interactive (list (completing-read
-                      (format "column to sort by: [%s]" kubectl-current-sort-column)
-                      (->> kubectl-current-display
-                           (s-split "\n")
-                           (--filter (s-starts-with? "NAME" it))
-                           (--map (s-split "[ ]+" it))
-                           (-flatten)
-                           (-uniq))
-                      nil
-                      nil)))
-  (setq kubectl-current-sort-column sort-column)
-  (kubectl-get-resources))
+  "Sort the section the cursor is in by SORT-COLUMN.
+Sends `set_sort' to the Go sidecar; only that section re-renders."
+  (interactive
+   (let ((alias (kubectl--current-section-alias)))
+     (if (not alias)
+         (user-error "kubectl: cursor isn't in a resource section")
+       (list (completing-read
+              (format "sort %s by [%s]: " alias (kubectl--effective-sort alias))
+              (kubectl--columns-for-section-at-point)
+              nil nil)))))
+  (let ((alias (kubectl--current-section-alias)))
+    (when (and alias (not (s-blank? sort-column)))
+      (ht-set! kubectl--sort-overrides alias sort-column)
+      (kubectl--sidecar-send
+       (list :type "set_sort" :alias alias :column sort-column)))))
 
 (setq kubectl--transient-grep-needle-history '())
 (defun kubectl-get-resources-grep ()
