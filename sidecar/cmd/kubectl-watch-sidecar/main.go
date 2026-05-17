@@ -779,17 +779,22 @@ func buildNodeTable(
 		}
 
 		allocCPU, allocMem := k8s.NodeAllocatable(node)
+		totalGPUs := k8s.NodeGPUTotal(node)
 		agg := aggregates[node.Name]
 		met, hasMet := metrics[node.Name]
 
 		podsStr := ""
 		gpusStr := "."
 		var creqStr, mreqStr string
+		usedGPUs := 0
 		if agg != nil {
 			podsStr = fmt.Sprintf("%d", agg.PodCount)
-			gpusStr = fmt.Sprintf("%d", agg.GPUCount)
+			usedGPUs = agg.GPUCount
 			creqStr = formatNodeCPUMetric(agg.CPUMilli, allocCPU)
 			mreqStr = formatNodeMemMetric(agg.MemMi, allocMem)
+		}
+		if totalGPUs > 0 {
+			gpusStr = fmt.Sprintf("%d/%d", usedGPUs, totalGPUs)
 		}
 		var cuseStr, museStr string
 		if hasMet {

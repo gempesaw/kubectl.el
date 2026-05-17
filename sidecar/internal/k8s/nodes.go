@@ -111,3 +111,16 @@ func NodeAllocatable(node *corev1.Node) (cpuMilli int64, memMi int64) {
 	}
 	return
 }
+
+// NodeGPUTotal returns the total GPU count (nvidia + amd) the node has allocatable.
+// Returns 0 for nodes without GPUs.
+func NodeGPUTotal(node *corev1.Node) int {
+	total := int64(0)
+	if v, ok := node.Status.Allocatable["nvidia.com/gpu"]; ok {
+		total += v.Value()
+	}
+	if v, ok := node.Status.Allocatable["amd.com/gpu"]; ok {
+		total += v.Value()
+	}
+	return int(total)
+}
