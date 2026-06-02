@@ -52,7 +52,7 @@ func Render(t Table, opts Options) string {
 		sortIdx = columnIndex(t.Columns, "NAME")
 	}
 	if sortIdx >= 0 {
-		sortRows(rows, t.Columns[sortIdx], sortIdx, opts.ReverseSort)
+		sortRows(rows, t.Columns[sortIdx], sortIdx, columnIndex(t.Columns, "NAME"), opts.ReverseSort)
 	}
 
 	if opts.Limit > 0 && len(rows) > opts.Limit {
@@ -90,22 +90,39 @@ func columnIndex(cols []Column, name string) int {
 	return -1
 }
 
-func sortRows(rows []Row, col Column, idx int, reverse bool) {
-	cmp := comparatorFor(col)
+// sortRows sorts ROWS in place by the primary column COL (at IDX), then by NAME
+// (at NAMEIDX) as a tie-breaker so the output is stable across renders. NAME
+// tie-break always ascends, even when the primary is reversed — flipping the
+// tie-break with reverse would just shuffle equal-primary groups in opposite
+// directions on each render of a "reversed AGE" column where many rows share
+// the same minute-granularity value.
+func sortRows(rows []Row, col Column, idx, nameIdx int, reverse bool) {
+	primary := comparatorFor(col)
 	sort.SliceStable(rows, func(i, j int) bool {
-		ai, aj := "", ""
-		if idx < len(rows[i].Cells) {
-			ai = rows[i].Cells[idx]
+		ai, aj := cellAt(rows[i], idx), cellAt(rows[j], idx)
+		aLess := primary(ai, aj)
+		bLess := primary(aj, ai)
+		if aLess != bLess {
+			if reverse {
+				return bLess
+			}
+			return aLess
 		}
-		if idx < len(rows[j].Cells) {
-			aj = rows[j].Cells[idx]
+		// Tie on primary — fall back to NAME ascending unless that's the
+		// primary column already (in which case nothing more to do).
+		if nameIdx < 0 || nameIdx == idx {
+			return false
 		}
-		less := cmp(ai, aj)
-		if reverse {
-			return !less
-		}
-		return less
+		ni, nj := cellAt(rows[i], nameIdx), cellAt(rows[j], nameIdx)
+		return naturalLess(ni, nj)
 	})
+}
+
+func cellAt(r Row, idx int) string {
+	if idx < 0 || idx >= len(r.Cells) {
+		return ""
+	}
+	return r.Cells[idx]
 }
 
 func formatTable(headers []string, rows []Row) string {
