@@ -57,6 +57,17 @@ type podStat struct {
 	gpus     int
 }
 
+// acceleratorResources is the list of extended-resource names we treat as "GPU"
+// for the node table's GPUs column. Aggregated across all types — a node with
+// 4 NVIDIA + 2 Qualcomm shows "6/<total>". Add new accelerator kinds here as
+// they appear on clusters.
+var acceleratorResources = []corev1.ResourceName{
+	"nvidia.com/gpu",
+	"amd.com/gpu",
+	"qualcomm.com/qaic",
+	"qualcomm.com/qaic-ultra",
+}
+
 func computePodStat(pod *corev1.Pod) podStat {
 	s := podStat{nodeName: pod.Spec.NodeName}
 	for _, ctr := range pod.Spec.Containers {
@@ -66,11 +77,10 @@ func computePodStat(pod *corev1.Pod) podStat {
 		if v, ok := ctr.Resources.Requests[corev1.ResourceMemory]; ok {
 			s.memMi += memToMi(v)
 		}
-		if v, ok := ctr.Resources.Limits["nvidia.com/gpu"]; ok {
-			s.gpus += int(v.Value())
-		}
-		if v, ok := ctr.Resources.Limits["amd.com/gpu"]; ok {
-			s.gpus += int(v.Value())
+		for _, name := range acceleratorResources {
+			if v, ok := ctr.Resources.Limits[name]; ok {
+				s.gpus += int(v.Value())
+			}
 		}
 	}
 	return s
@@ -209,15 +219,15 @@ func NodeAllocatable(node *corev1.Node) (cpuMilli int64, memMi int64) {
 	return
 }
 
-// NodeGPUTotal returns the total GPU count (nvidia + amd) the node has allocatable.
-// Returns 0 for nodes without GPUs.
+// NodeGPUTotal returns the total accelerator count the node has allocatable,
+// summed across every kind listed in `acceleratorResources` (NVIDIA + AMD +
+// Qualcomm AI). Returns 0 for nodes without any.
 func NodeGPUTotal(node *corev1.Node) int {
 	total := int64(0)
-	if v, ok := node.Status.Allocatable["nvidia.com/gpu"]; ok {
-		total += v.Value()
-	}
-	if v, ok := node.Status.Allocatable["amd.com/gpu"]; ok {
-		total += v.Value()
+	for _, name := range acceleratorResources {
+		if v, ok := node.Status.Allocatable[name]; ok {
+			total += v.Value()
+		}
 	}
 	return int(total)
 }
