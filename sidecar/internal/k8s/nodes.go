@@ -4,9 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/watch"
 )
 
 type NodeUtilization struct {
@@ -46,46 +49,140 @@ type NodeAggregate struct {
 	MemMi    int64
 }
 
-// FetchClusterPodAggregates lists all Running pods cluster-wide and groups by node.
-// One LIST per call (matches python's poll_podcount cadence). The field selector
-// trims completed pods on the server side.
-func (c *Clients) FetchClusterPodAggregates(ctx context.Context) (map[string]*NodeAggregate, error) {
-	list, err := c.Core.CoreV1().Pods("").List(ctx, metav1.ListOptions{
-		FieldSelector: "status.phase==Running",
-	})
-	if err != nil {
-		return nil, fmt.Errorf("list cluster pods: %w", err)
-	}
+// podStat is the per-pod data the node aggregator caches between events.
+type podStat struct {
+	nodeName string
+	cpuMilli int64
+	memMi    int64
+	gpus     int
+}
 
-	out := make(map[string]*NodeAggregate)
-	for i := range list.Items {
-		pod := &list.Items[i]
-		node := pod.Spec.NodeName
-		if node == "" {
-			continue
+func computePodStat(pod *corev1.Pod) podStat {
+	s := podStat{nodeName: pod.Spec.NodeName}
+	for _, ctr := range pod.Spec.Containers {
+		if v, ok := ctr.Resources.Requests[corev1.ResourceCPU]; ok {
+			s.cpuMilli += v.MilliValue()
 		}
-		agg, ok := out[node]
-		if !ok {
-			agg = &NodeAggregate{NodeName: node}
-			out[node] = agg
+		if v, ok := ctr.Resources.Requests[corev1.ResourceMemory]; ok {
+			s.memMi += memToMi(v)
 		}
-		agg.PodCount++
-		for _, ctr := range pod.Spec.Containers {
-			if v, ok := ctr.Resources.Requests[corev1.ResourceCPU]; ok {
-				agg.CPUMilli += v.MilliValue()
-			}
-			if v, ok := ctr.Resources.Requests[corev1.ResourceMemory]; ok {
-				agg.MemMi += memToMi(v)
-			}
-			if v, ok := ctr.Resources.Limits["nvidia.com/gpu"]; ok {
-				agg.GPUCount += int(v.Value())
-			}
-			if v, ok := ctr.Resources.Limits["amd.com/gpu"]; ok {
-				agg.GPUCount += int(v.Value())
-			}
+		if v, ok := ctr.Resources.Limits["nvidia.com/gpu"]; ok {
+			s.gpus += int(v.Value())
+		}
+		if v, ok := ctr.Resources.Limits["amd.com/gpu"]; ok {
+			s.gpus += int(v.Value())
 		}
 	}
-	return out, nil
+	return s
+}
+
+// StreamPodAggregates opens a cluster-wide watch on Running pods and emits a fresh
+// per-node aggregate map on every pod change. Initial state is published as soon
+// as the first LIST returns. Aggregator self-recovers on watch errors (re-LIST and
+// re-WATCH). Channel closes only when the context is cancelled.
+//
+// This replaces the previous "LIST every 15s" polling so the node table's
+// Pods/CReq/MReq/GPUs columns track pod churn in near-real-time.
+func (c *Clients) StreamPodAggregates(ctx context.Context) <-chan map[string]*NodeAggregate {
+	out := make(chan map[string]*NodeAggregate, 4)
+
+	go func() {
+		defer close(out)
+		pods := make(map[string]podStat) // key: ns/name
+
+		publish := func() {
+			agg := make(map[string]*NodeAggregate, 64)
+			for _, p := range pods {
+				if p.nodeName == "" {
+					continue
+				}
+				a, ok := agg[p.nodeName]
+				if !ok {
+					a = &NodeAggregate{NodeName: p.nodeName}
+					agg[p.nodeName] = a
+				}
+				a.PodCount++
+				a.CPUMilli += p.cpuMilli
+				a.MemMi += p.memMi
+				a.GPUCount += p.gpus
+			}
+			select {
+			case out <- agg:
+			case <-ctx.Done():
+			}
+		}
+
+		for ctx.Err() == nil {
+			// Initial LIST — trims to Running pods on the server side so we don't
+			// stream Pending/Succeeded/Failed pods we'd ignore anyway.
+			list, err := c.Core.CoreV1().Pods("").List(ctx, metav1.ListOptions{
+				FieldSelector: "status.phase==Running",
+			})
+			if err != nil {
+				log.Printf("[node-agg] list cluster pods: %v", err)
+				if !sleepCtx(ctx, 2*time.Second) {
+					return
+				}
+				continue
+			}
+
+			pods = make(map[string]podStat, len(list.Items))
+			for i := range list.Items {
+				p := &list.Items[i]
+				pods[p.Namespace+"/"+p.Name] = computePodStat(p)
+			}
+			publish()
+
+			// Stream changes from the LIST's resourceVersion.
+			w, err := c.Core.CoreV1().Pods("").Watch(ctx, metav1.ListOptions{
+				FieldSelector:       "status.phase==Running",
+				ResourceVersion:     list.ResourceVersion,
+				AllowWatchBookmarks: true,
+			})
+			if err != nil {
+				log.Printf("[node-agg] watch: %v", err)
+				if !sleepCtx(ctx, 2*time.Second) {
+					return
+				}
+				continue
+			}
+
+			for ev := range w.ResultChan() {
+				switch ev.Type {
+				case watch.Added, watch.Modified:
+					p, ok := ev.Object.(*corev1.Pod)
+					if !ok {
+						continue
+					}
+					pods[p.Namespace+"/"+p.Name] = computePodStat(p)
+					publish()
+				case watch.Deleted:
+					p, ok := ev.Object.(*corev1.Pod)
+					if !ok {
+						continue
+					}
+					delete(pods, p.Namespace+"/"+p.Name)
+					publish()
+				case watch.Error:
+					log.Printf("[node-agg] watch error event: %v", ev.Object)
+				}
+			}
+			// Result channel closed (server timeout / disconnect). Loop and re-LIST.
+		}
+	}()
+
+	return out
+}
+
+// sleepCtx is like time.Sleep but bails out on ctx cancellation. Returns false if
+// the context was cancelled.
+func sleepCtx(ctx context.Context, d time.Duration) bool {
+	select {
+	case <-time.After(d):
+		return true
+	case <-ctx.Done():
+		return false
+	}
 }
 
 // DecodeNode unpacks a Row's Object as a *corev1.Node.

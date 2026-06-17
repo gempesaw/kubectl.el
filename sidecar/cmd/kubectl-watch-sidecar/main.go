@@ -22,8 +22,7 @@ const (
 	nodeBufferAlias      = "kcnodes"
 	displayLimit         = 20
 	metricsInterval      = 10 * time.Second
-	nodeMetricsInterval  = 60 * time.Second
-	nodeAggregateInterval = 15 * time.Second
+	nodeMetricsInterval  = 15 * time.Second
 	relistBackoff        = 2 * time.Second
 )
 
@@ -321,6 +320,9 @@ func runPodLoop(ctx context.Context, clients *k8s.Clients, sock *socket.Client, 
 		for _, r := range snap.Rows {
 			rows[rowKey(r)] = r
 		}
+		// Render rows immediately even if metrics haven't arrived yet — the
+		// metrics goroutine's first fetch is already in flight and will trigger
+		// a re-render via drainPodEvents the moment it lands.
 		send()
 
 		events, errs := clients.WatchResource(ctx, id, ns, snap.ResourceVersion)
@@ -567,8 +569,9 @@ func runNodeLoop(ctx context.Context, clients *k8s.Clients, sock *socket.Client,
 	metricsCh := make(chan map[string]k8s.NodeUtilization, 1)
 	go pollNodeMetricsForever(ctx, clients, metricsCh)
 
-	aggCh := make(chan map[string]*k8s.NodeAggregate, 1)
-	go pollNodeAggregatesForever(ctx, clients, aggCh)
+	// Aggregates stream from a cluster-wide pod watch (Running pods only). Updates
+	// flow on every pod change instead of every 15 seconds.
+	aggCh := clients.StreamPodAggregates(ctx)
 
 	send := func() {
 		sortCol := ctrl.SortOrDefault(nodeAlias, defaultSortFor(nodeAlias))
@@ -599,6 +602,11 @@ func runNodeLoop(ctx context.Context, clients *k8s.Clients, sock *socket.Client,
 				rows[name] = r
 			}
 		}
+		// Render rows immediately even if metrics/aggregates haven't arrived —
+		// they fetch in parallel and trigger a re-render via drainNodeEvents.
+		// The pod-aggregate fetch in particular is cluster-wide and slow on
+		// large clusters; not blocking on it gets the node list on screen
+		// hundreds of ms (or seconds) earlier.
 		send()
 
 		events, errs := clients.WatchResource(ctx, k8s.NodeResource, "", snap.ResourceVersion)
@@ -675,33 +683,6 @@ func pollNodeMetricsForever(ctx context.Context, clients *k8s.Clients, out chan<
 		}
 		select {
 		case out <- m:
-		case <-ctx.Done():
-		}
-	}
-
-	fetch()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-tick.C:
-			fetch()
-		}
-	}
-}
-
-func pollNodeAggregatesForever(ctx context.Context, clients *k8s.Clients, out chan<- map[string]*k8s.NodeAggregate) {
-	tick := time.NewTicker(nodeAggregateInterval)
-	defer tick.Stop()
-
-	fetch := func() {
-		agg, err := clients.FetchClusterPodAggregates(ctx)
-		if err != nil {
-			log.Printf("[nodes] cluster pod aggregate: %v (continuing)", err)
-			return
-		}
-		select {
-		case out <- agg:
 		case <-ctx.Done():
 		}
 	}
