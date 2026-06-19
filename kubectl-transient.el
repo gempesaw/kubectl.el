@@ -35,6 +35,7 @@
    ("K F F" "delete resource" kubectl-force-delete-resource-at-point)
    ("K f" "remove finalizers:" kubectl-remove-finalizers)
    ("K B" "bulk delete pods by status" kubectl-bulk-delete-pods-by-status)
+   ("e" "events for resource (posframe)" kubectl-show-events-at-point)
    ("u" "remove annotation: remove last-applied-configuration annotation" kubectl-unmark-last-applied-configuration-at-point)
    ("p" "pop to create buffer" kubectl-pop-to-create-resource-buffer)]
 
@@ -49,6 +50,7 @@
   ["nodes"
    ("n n" "view node on line" kubectl-view-node-on-line)
    ("n w" "copy node name" kubectl-copy-as-kill-node-on-line)
+   ("n p" "pods on node (posframe)" kubectl-show-pods-on-node)
    ("n c" "cordon nodes" kubectl-cordon-nodes-at-point)
    ("n u" "uncordon nodes" kubectl-uncordon-nodes-at-point)
    ("n d" "drain nodes" kubectl-drain-nodes-at-point)]
