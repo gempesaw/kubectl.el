@@ -152,10 +152,12 @@
       ("\\b\\(statefulset\\)[^/ ]+/[^ ]+ +\\([0-9]+\\)/\\2" 0 '(:foreground ,fairy-mint-600))
       ("\\b\\(statefulset\\)[^/ ]+/[^ ]+ +[0-9]+/[0-9]+" 0 '(:foreground ,fairy-carrot-600))
 
-      ("^\\(node/ip?-[^ ]+\\).*\\(Ready\\)"
-       (1 '(:foreground ,fairy-sky-600))
-       (2 '(:foreground ,fairy-mint-600))
-       )
+      ;; Color the node name (always) and status keywords. Use word boundaries
+      ;; so `Ready' doesn't match the substring inside `NotReady'.
+      ("^\\(node/[^ ]+\\)" 1 '(:foreground ,fairy-sky-600))
+      ("\\bNotReady\\b" 0 '(:foreground ,fairy-carrot-1000))
+      ("\\bSchedulingDisabled\\b" 0 '(:foreground "#ff9933"))
+      ("^node/[^ ]+.*\\(\\bReady\\b\\)" 1 '(:foreground ,fairy-mint-600))
 
       ))
 
