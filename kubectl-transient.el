@@ -305,7 +305,9 @@ Priority: super-useri > power-user > kubernetes-admin > read-only."
           (lambda (_)
             (transient-parse-suffixes
              'kubectl-transient--jump-to-resource
-             (->> kubectl-current-display
+             (->> (s-join "\n"
+                          (list (ht-get kubectl--resource-contents "kcnodes" "")
+                                kubectl-current-display))
                   (s-split "\n")
                   (--filter (s-matches-p ".*/.*[[:digit:]]" it))
                   (--map (car (s-split "/" it)))
