@@ -1,5 +1,6 @@
 (require 'epc)
 (require 'ht)
+(require 'kubectl-aws)
 
 (require 'server)
 (unless (server-running-p)
@@ -33,7 +34,32 @@ Key is the alias (\"po\", \"deploy\", \"kcnodes\", ...); value is non-nil if tog
 
 (defvar kubectl--sort-overrides (ht-create)
   "Hash table tracking per-alias sort-column overrides (set via `s' on a section).
-Key is the alias; value is a column-name string.")
+Key is the alias; value is a column-name string. Persisted to
+`kubectl--sort-overrides-file' so user-chosen sorts survive Emacs restarts.")
+
+(defvar kubectl--sort-overrides-file
+  (expand-file-name "kubectl-sort-overrides" user-emacs-directory)
+  "Where `kubectl--sort-overrides' is persisted. One \"alias\tcolumn\" line each.")
+
+(defun kubectl--save-sort-overrides ()
+  "Persist `kubectl--sort-overrides' to disk."
+  (with-temp-file kubectl--sort-overrides-file
+    (ht-each (lambda (alias column)
+               (when (and alias column (not (s-blank? column)))
+                 (insert (format "%s\t%s\n" alias column))))
+             kubectl--sort-overrides)))
+
+(defun kubectl--load-sort-overrides ()
+  "Hydrate `kubectl--sort-overrides' from disk (best-effort, ignores errors)."
+  (when (file-exists-p kubectl--sort-overrides-file)
+    (with-temp-buffer
+      (insert-file-contents kubectl--sort-overrides-file)
+      (dolist (line (s-split "\n" (buffer-string) t))
+        (let ((parts (s-split "\t" line)))
+          (when (= 2 (length parts))
+            (ht-set! kubectl--sort-overrides (car parts) (cadr parts))))))))
+
+(kubectl--load-sort-overrides)
 
 (defvar kubectl--default-sorts
   '(("kcnodes" . "NAME"))
@@ -42,7 +68,6 @@ Anything not listed falls back to \"AGE\". Keep in sync with sidecar's
 `defaultSortFor' in cmd/kubectl-watch-sidecar/main.go.")
 
 (defvar kubectl--display-redraw-timer nil)
-(defvar kubectl--cancel-watch-timer nil)
 
 (defun kubectl--cancel-timer (sym)
   "Cancel the timer stored in SYM if any, and nil out the var."
@@ -90,8 +115,11 @@ the rendered contents string. Populated by the socket filter.")
 
 (defun kubectl--watch-filter (proc chunk)
   ;; Remember the accepted-connection process so we can write back to the sidecar.
+  ;; On a fresh connection, replay any persisted overrides so the sidecar
+  ;; reflects the user's session state from before its restart.
   (unless (eq kubectl--sidecar-connection proc)
-    (setq kubectl--sidecar-connection proc))
+    (setq kubectl--sidecar-connection proc)
+    (kubectl--replay-overrides))
   (let* ((acc (concat (or (process-get proc :kubectl-buf) "") chunk))
          (lines (split-string acc "\n"))
          (partial (car (last lines)))
@@ -101,11 +129,23 @@ the rendered contents string. Populated by the socket filter.")
       (when (> (length line) 0)
         (kubectl--watch-handle-message line)))))
 
+(defun kubectl--replay-overrides ()
+  "Re-send all stored sort overrides to the freshly-connected sidecar."
+  (ht-each (lambda (alias column)
+             (when (and alias column (not (s-blank? column)))
+               (kubectl--sidecar-send
+                (list :type "set_sort" :alias alias :column column))))
+           kubectl--sort-overrides))
+
 (defun kubectl--sidecar-send (plist)
-  "Send PLIST as a JSON line to the connected Go sidecar."
-  (when (process-live-p kubectl--sidecar-connection)
-    (process-send-string kubectl--sidecar-connection
-                         (concat (json-encode plist) "\n"))))
+  "Send PLIST as a JSON line to the connected Go sidecar.
+Returns non-nil on success, nil if the sidecar isn't connected (with a message)."
+  (if (process-live-p kubectl--sidecar-connection)
+      (progn (process-send-string kubectl--sidecar-connection
+                                  (concat (json-encode plist) "\n"))
+             t)
+    (message "kubectl: sidecar not connected — press g to restart")
+    nil))
 
 (defun kubectl--active-resources ()
   "Return the resource-alias list active right now (single ns vs all-ns)."
@@ -164,9 +204,9 @@ For unlimited sections (nodes) it flips between full and top-20."
                      ((not now-expanded) default)
                      ((= default 0) 20)      ; default unlimited → collapse to 20
                      (t 0))))                ; default limited → expand to all
-        (ht-set! kubectl--expanded-aliases alias now-expanded)
-        (kubectl--sidecar-send
-         (list :type "set_limit" :alias alias :limit limit))))))
+        (when (kubectl--sidecar-send
+               (list :type "set_limit" :alias alias :limit limit))
+          (ht-set! kubectl--expanded-aliases alias now-expanded))))))
 
 (defun kubectl--watch-handle-message (line)
   (condition-case err
@@ -182,10 +222,10 @@ For unlimited sections (nodes) it flips between full and top-20."
   (when (process-live-p kubectl--watch-sidecar-process)
     (delete-process kubectl--watch-sidecar-process))
   (kubectl--cancel-timer 'kubectl--display-redraw-timer)
-  (kubectl--cancel-timer 'kubectl--cancel-watch-timer)
   (ht-clear! kubectl--resource-contents)
   (ht-clear! kubectl--expanded-aliases)
-  (ht-clear! kubectl--sort-overrides)
+  ;; `kubectl--sort-overrides' is preserved across restarts so a user's chosen
+  ;; sort sticks (replayed to the new sidecar in `kubectl--watch-filter').
   (setq kubectl--sidecar-connection nil)
   (kubectl--watch-server-start)
   (let* ((resources (if kubectl-all-namespaces kubectl-resources-current-all-ns kubectl-resources-current))
@@ -199,18 +239,18 @@ For unlimited sections (nodes) it flips between full and top-20."
          (sidecar-binary (kubectl--ensure-sidecar-built))
          (socket-path (kubectl--watch-socket-path)))
     (setq kubectl--watch-sidecar-process
-          (with-environment-variables (("KUBECTL_WATCH_SOCKET" socket-path))
-            (start-process
-             "kubectl-watch-sidecar"
-             kubectl-process-buffer-name
-             sidecar-binary
-             resources
-             namespace
-             sort-column
-             grep-needle))
+          (kubectl-with-aws-env
+            (with-environment-variables (("KUBECTL_WATCH_SOCKET" socket-path))
+              (start-process
+               "kubectl-watch-sidecar"
+               kubectl-process-buffer-name
+               sidecar-binary
+               resources
+               namespace
+               sort-column
+               grep-needle)))
           kubectl--transient-grep-needle grep-needle)
-    (kubectl--schedule-redraw)
-    (kubectl--get-resources-cancel)))
+    (kubectl--schedule-redraw)))
 
 (defun kubectl--write-buffer-contents (buf contents)
   (ht-set! kubectl--resource-contents buf contents)
@@ -234,15 +274,10 @@ For unlimited sections (nodes) it flips between full and top-20."
       (unless (s-equals-p contents kubectl-current-display)
         (kubectl-redraw contents)))))
 
-(defun kubectl--get-resources-cancel ()
-  "cancel the watch cuz the window is unfocused"
-  (when (process-live-p kubectl--watch-sidecar-process)
-    (when (not (get-buffer-window kubectl-main-buffer-name))
-      (message "kubectl.el: cancelling watch")
-      (delete-process kubectl--watch-sidecar-process))
-    (kubectl--cancel-timer 'kubectl--cancel-watch-timer)
-    (setq kubectl--cancel-watch-timer
-          (run-with-timer 60 nil 'kubectl--get-resources-cancel))))
+;; Previously: `kubectl--get-resources-cancel' polled every 60s and killed the
+;; sidecar whenever *kubectl* had no visible window. That was a python-era
+;; defense against an expensive long-running watch; the Go sidecar is cheap so
+;; we just let it keep running until the next `g' explicitly restarts it.
 
 (defvar kubectl-current-sort-column "NAME"
   "Legacy global default; still passed as argv[3] to the sidecar but the sidecar
@@ -284,9 +319,10 @@ Sends `set_sort' to the Go sidecar; only that section re-renders."
               nil nil)))))
   (let ((alias (kubectl--current-section-alias)))
     (when (and alias (not (s-blank? sort-column)))
-      (ht-set! kubectl--sort-overrides alias sort-column)
-      (kubectl--sidecar-send
-       (list :type "set_sort" :alias alias :column sort-column)))))
+      (when (kubectl--sidecar-send
+             (list :type "set_sort" :alias alias :column sort-column))
+        (ht-set! kubectl--sort-overrides alias sort-column)
+        (kubectl--save-sort-overrides)))))
 
 (setq kubectl--transient-grep-needle-history '())
 (defun kubectl-get-resources-grep ()
