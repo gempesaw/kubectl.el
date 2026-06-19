@@ -127,16 +127,47 @@
   (setq truncate-lines t)
   (setq buffer-read-only t)
   (so-long-minor-mode 1)
-  (setq font-lock-defaults '(kubectl-command-font-lock-keywords))
+  (setq font-lock-defaults '(kubectl-command-font-lock-keywords t))
   (font-lock-mode 1)
   (define-key kubectl-command-mode-map (kbd "q") 'kubectl--command-quit-window)
-  (define-key kubectl-command-mode-map (kbd "g") 'kubectl--command-refresh))
+  (define-key kubectl-command-mode-map (kbd "g") 'kubectl--command-refresh)
+  (define-key kubectl-command-mode-map (kbd "j") 'kubectl--command-jump-to-header))
 
 (defun kubectl--command-quit-window ()
   (interactive)
   (if (s-equals-p (buffer-name) kubectl-process-buffer-name)
       (quit-window)
     (quit-window t)))
+
+(defun kubectl--command-collect-headers ()
+  "Return alist of (HEADER-LABEL . POSITION) for top-level fields in this buffer."
+  (let (headers)
+    (save-excursion
+      (goto-char (point-min))
+      (while (re-search-forward "^\\([A-Z][A-Za-z0-9 /-]*\\):" nil t)
+        (push (cons (match-string-no-properties 1) (match-beginning 0))
+              headers)))
+    (nreverse headers)))
+
+(defun kubectl--command-jump-to-header ()
+  "Jump to a top-level field in the current kubectl describe / get buffer."
+  (interactive)
+  (let* ((headers (kubectl--command-collect-headers))
+         (_ (unless headers (user-error "No top-level headers found")))
+         (completion-extra-properties
+          '(:annotation-function
+            (lambda (_) "")))
+         (choice (completing-read "Jump to: "
+                                  (lambda (string pred action)
+                                    (if (eq action 'metadata)
+                                        '(metadata (display-sort-function . identity)
+                                                   (cycle-sort-function . identity))
+                                      (complete-with-action action headers string pred)))
+                                  nil t)))
+    (when-let ((pos (cdr (assoc choice headers))))
+      (push-mark)
+      (goto-char pos)
+      (recenter 0))))
 
 (defun kubectl--command-refresh ()
   (interactive)
