@@ -37,17 +37,22 @@
 
 (defun kubectl-edit-apply ()
   (interactive)
-  (when (y-or-n-p (format "Confirm apply (cluster: %s | context: %s | namespace: %s) ?"
-                          kubectl-current-cluster
-                          kubectl-current-context
-                          kubectl-current-namespace))
-    (let* ((command (format "kubectl apply -f %s" buffer-file-name))
-           (bpr-on-success 'kubectl-edit--cleanup)
-           (bpr-process-mode 'kubectl-command-mode))
-      (save-buffer)
-      (setq kubectl-edit--edit-buffer (current-buffer))
-      (kubectl--update-process-buffer-string command t)
-      (bpr-spawn command))))
+  (let ((prompt (format "Confirm apply (cluster: %s | context: %s | namespace: %s) ?"
+                        kubectl-current-cluster
+                        kubectl-current-context
+                        kubectl-current-namespace))
+        (buf (current-buffer))
+        (file buffer-file-name))
+    (kubectl-confirm prompt
+                     (lambda ()
+                       (kubectl-with-aws-env
+                         (let* ((command (format "kubectl apply -f %s" file))
+                                (bpr-on-success 'kubectl-edit--cleanup)
+                                (bpr-process-mode 'kubectl-command-mode))
+                           (with-current-buffer buf (save-buffer))
+                           (setq kubectl-edit--edit-buffer buf)
+                           (kubectl--update-process-buffer-string command t)
+                           (bpr-spawn command)))))))
 
 (defun kubectl-edit-cancel ()
   (interactive)
