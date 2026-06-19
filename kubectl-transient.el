@@ -323,62 +323,61 @@ Priority: super-useri > power-user > kubernetes-admin > read-only."
 
 (defvar kubectl-resources-current-all-ns "pods")
 
+(defun kubectl--switch-to-single-ns ()
+  "Leave all-namespaces mode while preserving the active namespace.
+Restores `kubectl-previous-namespace' only when we were in all-ns mode,
+otherwise keeps `kubectl-current-namespace' as-is so resource aliases
+(rj/rp/rb/...) don't clobber the user's namespace with an empty string."
+  (when kubectl-all-namespaces
+    (setq kubectl-current-namespace kubectl-previous-namespace))
+  (setq kubectl-all-namespaces nil))
+
 (defun kubectl-set-current-as-default ()
   (interactive)
-  (setq kubectl-resources-default kubectl-resources-current
-        kubectl-all-namespaces nil
-        kubectl-current-namespace kubectl-previous-namespace)
-  (when (s-matches-p kubectl-current-namespace "All ")
-    (setq kubectl-current-namespace kubectl-previous-namespace))
+  (kubectl--switch-to-single-ns)
+  (setq kubectl-resources-default kubectl-resources-current)
   (kubectl-get-resources))
 
 (defun kubectl-reset-resources ()
   (interactive)
-  (setq kubectl-resources-current kubectl-resources-default
-        kubectl-all-namespaces nil
-        kubectl-current-namespace kubectl-previous-namespace)
+  (kubectl--switch-to-single-ns)
+  (setq kubectl-resources-current kubectl-resources-default)
   (kubectl-get-resources))
 
 (defun kubectl-set-resources-cluster-rbac ()
   (interactive)
-  (setq kubectl-resources-current "clusterroles,clusterrolebindings"
-        kubectl-all-namespaces nil
-        kubectl-current-namespace kubectl-previous-namespace)
+  (kubectl--switch-to-single-ns)
+  (setq kubectl-resources-current "clusterroles,clusterrolebindings")
   (kubectl-get-resources))
 
 (defun kubectl-set-resources-rbac ()
   (interactive)
-  (setq kubectl-resources-current "roles,rolebindings,sa"
-        kubectl-all-namespaces nil
-        kubectl-current-namespace kubectl-previous-namespace)
+  (kubectl--switch-to-single-ns)
+  (setq kubectl-resources-current "roles,rolebindings,sa")
   (kubectl-get-resources))
 
 (defun kubectl-set-resources-jobs ()
   (interactive)
-  (setq kubectl-resources-current "cronjobs,jobs,pods,cm"
-        kubectl-all-namespaces nil
-        kubectl-current-namespace kubectl-previous-namespace)
+  (kubectl--switch-to-single-ns)
+  (setq kubectl-resources-current "cronjobs,jobs,pods,cm")
   (kubectl-get-resources))
 
 (defun kubectl-set-resources-secrets ()
   (interactive)
-  (setq kubectl-resources-current "clusterexternalsecrets,clustersecretstores,externalsecrets.external-secrets.io,secretstores,secrets"
-        kubectl-all-namespaces nil
-        kubectl-current-namespace kubectl-previous-namespace)
+  (kubectl--switch-to-single-ns)
+  (setq kubectl-resources-current "clusterexternalsecrets,clustersecretstores,externalsecrets.external-secrets.io,secretstores,secrets")
   (kubectl-get-resources))
 
 (defun kubectl-set-resources-volumes ()
   (interactive)
-  (setq kubectl-resources-current "pvc,pv,volumeattachments,storageclasses"
-        kubectl-all-namespaces nil
-        kubectl-current-namespace kubectl-previous-namespace)
+  (kubectl--switch-to-single-ns)
+  (setq kubectl-resources-current "pvc,pv,volumeattachments,storageclasses")
   (kubectl-get-resources))
 
 (defun kubectl-set-resources-all-no-pods ()
   (interactive)
-  (setq kubectl-resources-current "ds,sts,deploy,svc,ing,cm"
-        kubectl-all-namespaces nil
-        kubectl-current-namespace kubectl-previous-namespace)
+  (kubectl--switch-to-single-ns)
+  (setq kubectl-resources-current "ds,sts,deploy,svc,ing,cm")
   (kubectl-get-resources))
 
 (defun kubectl-set-resources-karpenter ()
@@ -407,23 +406,20 @@ Priority: super-useri > power-user > kubernetes-admin > read-only."
 
 (defun kubectl-add-resource (resource)
   (interactive (list (completing-read (format "Resource to query for: %s," kubectl-resources-current) (-concat kubectl-api-abbreviations kubectl-api-resource-names) nil nil)))
-  (setq kubectl-resources-current (format "%s,%s" kubectl-resources-default resource)
-        kubectl-all-namespaces nil
-        kubectl-current-namespace kubectl-previous-namespace)
+  (kubectl--switch-to-single-ns)
+  (setq kubectl-resources-current (format "%s,%s" kubectl-resources-default resource))
   (kubectl-get-resources))
 
 (defun kubectl-add-current-resource (resource)
   (interactive (list (completing-read (format "Resource to query for: %s," kubectl-resources-current) (-concat kubectl-api-abbreviations kubectl-api-resource-names) nil nil)))
-  (setq kubectl-resources-current (format "%s,%s" kubectl-resources-current resource)
-        kubectl-all-namespaces nil
-        kubectl-current-namespace kubectl-previous-namespace)
+  (kubectl--switch-to-single-ns)
+  (setq kubectl-resources-current (format "%s,%s" kubectl-resources-current resource))
   (kubectl-get-resources))
 
 (defun kubectl-set-resource (resource)
   (interactive (list (completing-read (format "Resource to query for: " kubectl-resources-current) (-concat kubectl-api-abbreviations kubectl-api-resource-names) nil nil)))
-  (setq kubectl-resources-current resource
-        kubectl-all-namespaces nil
-        kubectl-current-namespace kubectl-previous-namespace)
+  (kubectl--switch-to-single-ns)
+  (setq kubectl-resources-current resource)
   (kubectl-get-resources))
 
 (defun kubectl-add-current-resource-all-ns (resource)
