@@ -3,6 +3,7 @@
 
 (require 'transient)
 (require 'ht)
+(require 'kubectl-aws)
 
 (defvar kubectl-previous-namespace "")
 
@@ -198,7 +199,7 @@ Priority: super-useri > power-user > kubernetes-admin > read-only."
               (namespace (transient-arg-value "ns=" args))
               (resources (transient-arg-value "r=" args))
               (aws-role (kubectl--get-aws-role context)))
-         (dg-modular-ensure-aws-profile-login aws-role)
+         (kubectl--auth-aws aws-role)
          (setq kubectl-current-context context
                kubectl-current-namespace namespace
                kubectl-resources-current resources

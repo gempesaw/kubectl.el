@@ -1,14 +1,15 @@
 (require 'ini)
+(require 'kubectl-aws)
 
 (defvar kubectl-all-namespaces nil)
 
 (defun kubectl--get-summary ()
   (let* ((kube-config-filename "~/.kube/config")
-         (current-context-name (s-trim (shell-command-to-string "kubectl config current-context")))
+         (current-context-name (s-trim (kubectl--shell "kubectl config current-context")))
          (current-context current-context-name)
-         (role (getenv "AWS_PROFILE"))
+         (role (or (plist-get kubectl--aws-creds :profile) (getenv "AWS_PROFILE")))
          (available-contexts (kubectl--get-available-contexts))
-         (namespace (s-trim (shell-command-to-string "kubens -c")))
+         (namespace (s-trim (kubectl--shell "kubens -c")))
          (context (-concat `(
                              ("context" ,(format "%s | %s | %s" (kubectl--cluster-color current-context-name) namespace role)))
                            ;; `(("session" ,(kubectl--get-remaining-time)))

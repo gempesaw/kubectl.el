@@ -1,4 +1,5 @@
 (require 'bpr)
+(require 'kubectl-aws)
 
 (defvar kubectl-process-buffer-name "*kubectl-process*")
 
@@ -27,25 +28,28 @@
                 string)))))
 
 (defun kubectl--run-process (command)
-  (let* ((bpr-on-completion 'kubectl--update-process-buffer)
-         (bpr-open-after-error nil))
-    (kubectl--update-process-buffer-string command t)
-    (bpr-spawn (kubectl--set-options command))))
+  (kubectl-with-aws-env
+    (let* ((bpr-on-completion 'kubectl--update-process-buffer)
+           (bpr-open-after-error nil))
+      (kubectl--update-process-buffer-string command t)
+      (bpr-spawn (kubectl--set-options command)))))
 
 (defun kubectl--run-process-bg (command &optional on-success)
-  (let* ((bpr-show-progress nil)
-         (bpr-on-success (if on-success on-success (lambda (process))))
-         (bpr-open-after-error nil)
-         (default-directory kubectl--my-directory))
-    (bpr-spawn (kubectl--set-options command))))
+  (kubectl-with-aws-env
+    (let* ((bpr-show-progress nil)
+           (bpr-on-success (if on-success on-success (lambda (process))))
+           (bpr-open-after-error nil)
+           (default-directory kubectl--my-directory))
+      (bpr-spawn (kubectl--set-options command)))))
 
 (defun kubectl--run-process-and-pop (command &optional editing)
-  (let* ((default-directory kubectl--my-directory)
-         (bpr-on-completion 'kubectl--pop-process)
-         (bpr-process-mode (if editing 'kubectl-edit-mode 'kubectl-command-mode))
-         (bpr-erase-process-buffer t)
-         (proc (bpr-spawn (kubectl--set-options command))))
-    (kubectl--update-process-buffer-string command t)))
+  (kubectl-with-aws-env
+    (let* ((default-directory kubectl--my-directory)
+           (bpr-on-completion 'kubectl--pop-process)
+           (bpr-process-mode (if editing 'kubectl-edit-mode 'kubectl-command-mode))
+           (bpr-erase-process-buffer t)
+           (proc (bpr-spawn (kubectl--set-options command))))
+      (kubectl--update-process-buffer-string command t))))
 
 (defun kubectl--pop-process (process)
   (let ((buffer (process-buffer process))

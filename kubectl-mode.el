@@ -1,5 +1,6 @@
 (require 's)
 (require 'dash)
+(require 'kubectl-aws)
 (require 'kubectl-process)
 (require 'kubectl-edit-mode)
 (require 'kubectl-command-mode)
@@ -92,14 +93,14 @@ Newline-separated, one namespace per line.")
 
 (defun kubectl--refresh-available-contexts ()
   (interactive)
-  (setq kubectl--cache-clusters (s-split "\n" (shell-command-to-string "kubectl config get-clusters | grep -v NAME") t)))
+  (setq kubectl--cache-clusters (s-split "\n" (kubectl--shell "kubectl config get-clusters | grep -v NAME") t)))
 
 (kubectl--refresh-available-contexts)
 (defun kubectl--get-available-contexts ()
   kubectl--cache-clusters)
 
 (defun kubectl-get-namespaces ()
-  (kubectl--cache-namespaces (--map (s-chop-prefix "> " it) (s-split "\n" (shell-command-to-string "kubectl get ns --no-headers --output=custom-columns=NAME:.metadata.name")))))
+  (kubectl--cache-namespaces (--map (s-chop-prefix "> " it) (s-split "\n" (kubectl--shell "kubectl get ns --no-headers --output=custom-columns=NAME:.metadata.name")))))
 
 (defun kubectl--cache-namespaces (namespaces)
   (setq kubectl-cached-namespaces (-uniq (-sort 'string-lessp (-concat namespaces kubectl-cached-namespaces))))
@@ -162,14 +163,14 @@ Returns a list; empty if the file doesn't exist yet."
   (interactive (list (completing-read
                       (format "namespace to switch to: [%s]" kubectl-current-namespace)
                       (->> "kubectl get namespaces -oname | sort"
-                           (shell-command-to-string)
+                           (kubectl--shell)
                            (s-trim)
                            (s-split "\n")
                            (--map (cadr (s-split "/" it))))
                       nil
                       nil)))
   (when (not (s-blank-p ns))
-    (shell-command-to-string (format "kubectl ns %s" ns))
+    (kubectl--shell (format "kubectl ns %s" ns))
     (setq kubectl--transient-grep-needle nil
           kubectl-current-display ""
           kubectl-all-namespaces (s-blank-p ns)

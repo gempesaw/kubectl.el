@@ -5,6 +5,7 @@
 (require 's)
 (require 'dash)
 (require 'epc)
+(require 'kubectl-aws)
 (require 'kubectl-process)
 (require 'kubectl-edit-mode)
 (require 'kubectl-command-mode)

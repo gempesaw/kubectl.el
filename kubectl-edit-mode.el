@@ -1,4 +1,6 @@
+;;; -*- lexical-binding: t; -*-
 (require 'bpr)
+(require 'kubectl-aws)
 (require 'kubectl-process)
 (require 'kubectl-get-resources)
 
@@ -25,7 +27,7 @@
 (defun kubectl-edit-resource-at-point ()
   (interactive)
   (setq kubectl-edit--current-resource (s-trim (kubectl-current-line-resource-as-string)))
-  (let* ((yaml (shell-command-to-string (format "kubectl get %s --output yaml" (kubectl-current-line-resource-as-string))))
+  (let* ((yaml (kubectl--shell (format "kubectl get %s --output yaml" (kubectl-current-line-resource-as-string))))
          (name (apply 'format "%s/%s-%s.yaml" (-insert-at 1 (format-time-string "%s" (current-time)) (s-split "/" kubectl-edit--current-resource))))
          (filename (f-join kubectl-edit--folder name)))
     (f-mkdir-full-path (f-dirname filename))
